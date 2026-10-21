@@ -10,7 +10,7 @@ import type { z } from "zod";
 import { DocumentKind } from "@/generated/prisma/enums";
 import { extractedSchema, trimmedSchema, unitsSchema, type Trimmed, type Unit } from "@/lib/application-data";
 import { prisma } from "@/lib/prisma";
-import { loadProfile } from "@/lib/profile-data";
+import { loadApplicationProfile } from "@/lib/agent/cv";
 import { loadSettings } from "@/lib/settings-data";
 import { loadTheme, THEME_FIELDS } from "@/lib/theme-data";
 import { BUILT_IN_THEMES, type ThemeData } from "@/lib/themes";
@@ -56,7 +56,7 @@ export type DocumentData = { units: Unit[]; theme: ThemeData; trimmed?: Trimmed 
  * the same for the page and for printing (E8-8).
  */
 export async function loadDocuments(id: string) {
-  const [application, profile, settings] = await Promise.all([loadApplication(id), loadProfile(), loadSettings()]);
+  const [application, profile, settings] = await Promise.all([loadApplication(id), loadApplicationProfile(id), loadSettings()]);
   const baseTheme = (await loadTheme(settings.baseThemeId)) ?? BUILT_IN_THEMES[0];
   const documentData = (kind: DocumentKind): DocumentData | null => {
     const document = application.documents.find((entry) => entry.kind === kind);

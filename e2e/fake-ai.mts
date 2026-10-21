@@ -30,8 +30,31 @@ type Unit = { id: string; label: string; text: string };
 
 /** Emails written so far, so writing again gives a different one. */
 let emails = 0;
+/** Score-call evidence lets agent specs prove excluded employers never reach scoring. */
+const agentScores: { title: string; company: string }[] = [];
 
 const answers: Record<string, (messages: Message[]) => unknown> = {
+  agent_posting_exclusions: (messages) => {
+    const content = messages[1].content;
+    const description = content.match(/<posting>\n([\s\S]*?)\n<\/posting>/)?.[1] ?? "";
+    const germanAd = description.includes("Wir suchen eine IT-Leitung.");
+    const consultancy = description.includes("provides technology consulting to external clients.");
+    const languages: { languages: string[]; obligation: "required" | "preferred"; match: "all"; evidence: string }[] = [];
+    for (const language of ["English", "Italian", "German"]) {
+      if (description.includes(`${language} is required.`)) languages.push({ languages: [language], obligation: "required", match: "all", evidence: `${language} is required.` });
+      if (description.includes(`${language} is preferred.`)) languages.push({ languages: [language], obligation: "preferred", match: "all", evidence: `${language} is preferred.` });
+      if (description.includes(`${language} is optional.`)) languages.push({ languages: [language], obligation: "preferred", match: "all", evidence: `${language} is optional.` });
+    }
+    return {
+      contentComplete: true,
+      postingLanguage: germanAd ? "other" : "english",
+      postingLanguageEvidence: germanAd ? "Wir suchen eine IT-Leitung." : description.split("\n")[0],
+      languageRequirementsCertain: true,
+      languageRequirements: languages,
+      employerIsConsultancy: consultancy ? "yes" : "no",
+      consultancyEvidence: description.split("\n").find((line) => /builds its own software products|entwickelt eigene Softwareprodukte|provides technology consulting to external clients/.test(line)) ?? null,
+    };
+  },
   extracted_posting: () => ({
     title: "Senior Product Designer, Payments · Ledgerly",
     company: "Ledgerly",
@@ -80,8 +103,9 @@ const answers: Record<string, (messages: Message[]) => unknown> = {
   // The job agent's score (E16): by the posting's title, so a spec knows
   // which postings make the queue (70 is the default minimum) and which don't.
   posting_score: (messages) => {
-    const { title } = section(messages[1].content, "The posting's facts:\n") as { title: string };
-    const score = /senior product designer/i.test(title) ? 91 : /product designer/i.test(title) ? 78 : 45;
+    const { title, company } = section(messages[1].content, "The posting's facts:\n") as { title: string; company: string };
+    agentScores.push({ title, company });
+    const score = /head of it|techops lead|it manager/i.test(title) ? 88 : /senior product designer/i.test(title) ? 91 : /product designer/i.test(title) ? 78 : 45;
     return {
       score,
       reasons: [score >= 70 ? `The profile's product design roles match "${title}".` : `"${title}" is further from the profile's roles.`],
@@ -203,6 +227,7 @@ createServer((request, response) => {
     response.end(JSON.stringify(body));
   };
   if (request.method === "GET" && request.url === "/health") return send(200, { ok: true });
+  if (request.method === "GET" && request.url === "/agent-scores") return send(200, { scores: agentScores });
   if (request.method === "GET" && request.url === "/v1/models") {
     return send(200, { object: "list", data: [{ id: "fake-model", object: "model", created: 0, owned_by: "e2e" }] });
   }

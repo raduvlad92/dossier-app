@@ -55,6 +55,21 @@ describe("Run now (E16-4)", () => {
     expect(await runAgentNow({})).toEqual({ ok: true, data: { jobId: running.id, reused: true } });
   });
 
+  it("serializes a timer tick racing Run now so both attach to the same queued scan", async () => {
+    const { startJob } = await import("@/lib/jobs/runner");
+    const { startDueRun } = await import("@/lib/agent/schedule");
+    vi.mocked(startJob).mockClear();
+    vi.mocked(startJob).mockImplementationOnce(async (definition, _input, options) => {
+      const job = await prisma().job.create({ data: { type: definition.type, key: options?.key, input: { manual: false } } });
+      return job.id;
+    });
+    const [scheduled, manual] = await Promise.all([startDueRun(), runAgentNow({})]);
+    expect(scheduled).toBeTruthy();
+    expect(manual).toEqual({ ok: true, data: { jobId: scheduled, reused: true } });
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(await prisma().job.count({ where: { key: "agent" } })).toBe(1);
+  });
+
   it("says what's missing before it starts", async () => {
     await saveSettings({ agentEnabled: false });
     expect(await runAgentNow({})).toEqual({ ok: false, error: "Turn the job agent on in Settings → Job agent first." });
@@ -68,12 +83,12 @@ describe("Run now (E16-4)", () => {
     expect(await runAgentNow({})).toMatchObject({ ok: false, error: "Choose a job source in Settings → Job search first." });
   });
 
-  it("waits an hour after the previous run, and keeps to 3 a day", async () => {
+  it("waits an hour after the previous run, and keeps to twelve a day", async () => {
     const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
     await saveSettings({ agentRuns: [{ at: at(20), manual: false, message: null }] });
     expect(await runAgentNow({})).toEqual({ ok: false, error: "The agent ran less than an hour ago. Try again in 40 minutes." });
-    await saveSettings({ agentRuns: [at(70), at(200), at(400)].map((time) => ({ at: time, manual: true, message: null })) });
-    expect(await runAgentNow({})).toMatchObject({ ok: false, error: expect.stringMatching(/^The agent has run 3 times in the past 24 hours/) });
+    await saveSettings({ agentRuns: Array.from({ length: 12 }, (_, index) => ({ at: at(70 + index * 60), manual: true, message: null })) });
+    expect(await runAgentNow({})).toMatchObject({ ok: false, error: expect.stringMatching(/^The agent has run 12 times in the past 24 hours/) });
   });
 });
 
@@ -125,6 +140,16 @@ describe("the drafts' actions (E16-5)", () => {
 });
 
 describe("saving the agent's settings (E16-7)", () => {
+  it("saves recurring targets, exclusions and CV choice, validating every enabled target", async () => {
+    const queries = [{ ...query, keywords: "Head of IT" }, { ...query, keywords: "IT Manager" }];
+    expect(await saveAgentSettings({ queries, intervalHours: 3, maxPages: 3, cvSource: "uploaded" })).toEqual({ ok: true, data: null });
+    expect(await loadSettings()).toMatchObject({ agentQueries: queries, agentIntervalHours: 3, agentMaxPages: 3, agentCvSource: "uploaded" });
+    expect(await saveAgentSettings({ enabled: true, queries: [queries[0], { ...queries[1], country: "" }] })).toMatchObject({ ok: false, error: "Choose a country for the search before turning the agent on." });
+    expect(await saveAgentSettings({ queries: Array.from({ length: 11 }, () => query) })).toMatchObject({ ok: false });
+    expect(await saveAgentSettings({ intervalHours: 4 } as never)).toMatchObject({ ok: false });
+    expect(await saveAgentSettings({ maxPages: 4 })).toMatchObject({ ok: false });
+  });
+
   it("saves each change, and turns on only with keywords and a country", async () => {
     await saveSettings({ agentEnabled: false, agentQuery: { ...query, keywords: "" } });
     expect(await saveAgentSettings({ enabled: true })).toEqual({ ok: false, error: "Type what the agent should look for before turning it on." });

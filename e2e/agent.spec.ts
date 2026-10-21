@@ -16,6 +16,10 @@ const card = (page: import("@playwright/test").Page, title: string) => page.getB
 
 test("finds, scores, drafts and dismisses, and never brings a posting back", async ({ page }) => {
   await page.goto("/settings?section=agent");
+  // A new watch suggests three roles; this scenario deliberately watches one.
+  while (await page.getByRole("button", { name: /Remove search \d+/ }).count()) {
+    await page.getByRole("button", { name: /Remove search \d+/ }).last().click();
+  }
   await page.getByLabel("What").fill("Product designer");
   await page.getByLabel("Country").selectOption("nl");
   await page.getByRole("switch", { name: "Run the job agent" }).click();

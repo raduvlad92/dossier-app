@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { encryptApiKey } from "@/lib/ai/api-key";
 import { EXPORT_FORMAT, EXPORT_SCHEMA_VERSION, EXPORT_SCHEMA_VERSIONS, exportSchema, INSTALL_SETTINGS, SECRET_SETTINGS, type DossierExport } from "@/lib/data-export";
+import { AGENT_CV_SECRET } from "@/lib/agent/cv";
 import { encryptSecret, JOB_SOURCE_KEY } from "@/lib/secrets";
 
 // Restoring from an export file (E10-6, SET-10): everything is replaced in
@@ -75,13 +76,15 @@ const json = (value: unknown) => (value === null || value === undefined ? Prisma
  * install's own settings (the usage ping's) stay as they are.
  */
 export async function importExport(db: PrismaClient, data: DossierExport): Promise<void> {
-  const { profile, themes, settings, applications, postings, searches, agentCandidates, apiKey, jobSourceKeys } = data;
+  const { profile, themes, settings, applications, postings, searches, agentCandidates, apiKey, jobSourceKeys, agentCv } = data;
   const fromFile: Record<string, string | null> = {
     apiKeyEnc: apiKey ? encryptApiKey(apiKey) : null,
     jsearchKeyEnc: jobSourceKeys?.jsearch ? encryptSecret(JOB_SOURCE_KEY, jobSourceKeys.jsearch) : null,
     adzunaKeyEnc: jobSourceKeys?.adzuna ? encryptSecret(JOB_SOURCE_KEY, jobSourceKeys.adzuna) : null,
+    agentCvUploadEnc: agentCv ? encryptSecret(AGENT_CV_SECRET, JSON.stringify(agentCv.profile)) : null,
+    agentCvUploadName: agentCv?.name ?? null,
   };
-  const keptKeys = [...SECRET_SETTINGS.filter((key) => !fromFile[key]), ...INSTALL_SETTINGS];
+  const keptKeys = [...SECRET_SETTINGS.filter((key) => !fromFile[key]), ...INSTALL_SETTINGS.filter((key) => !fromFile[key])];
   await db.$transaction(
     async (tx) => {
       // Out with the old. Applications take their history, documents, chat,
@@ -105,7 +108,8 @@ export async function importExport(db: PrismaClient, data: DossierExport): Promi
         tx.education.deleteMany(),
         tx.reference.deleteMany(),
         tx.theme.deleteMany({ where: { builtIn: false } }),
-        tx.setting.deleteMany({ where: { key: { notIn: keptKeys } } }),
+        // Remote run journals prevent duplicate charges after an import or restart.
+        tx.setting.deleteMany({ where: { AND: [{ key: { notIn: keptKeys } }, { NOT: { key: { startsWith: "agent-parser:" } } }] } }),
       ]);
 
       // In with the new.
@@ -125,7 +129,7 @@ export async function importExport(db: PrismaClient, data: DossierExport): Promi
       await tx.education.createMany({ data: profile.education });
       await tx.reference.createMany({ data: profile.references });
       await tx.theme.createMany({ data: themes.map((theme) => ({ ...theme, builtIn: false })) });
-      await tx.setting.createMany({ data: settings.filter((setting) => !SECRET_SETTINGS.includes(setting.key) && !INSTALL_SETTINGS.includes(setting.key)) });
+      await tx.setting.createMany({ data: settings.filter((setting) => !SECRET_SETTINGS.includes(setting.key) && !INSTALL_SETTINGS.includes(setting.key) && !setting.key.startsWith("agent-parser:")) });
       for (const [key, value] of Object.entries(fromFile)) if (value) await tx.setting.create({ data: { key, value } });
 
       const themeIds = new Set((await tx.theme.findMany({ select: { id: true } })).map((theme) => theme.id));
@@ -134,6 +138,7 @@ export async function importExport(db: PrismaClient, data: DossierExport): Promi
           ...omit(application, "events", "documents", "messages", "notes"),
           extracted: json(application.extracted),
           match: json(application.match),
+          profileSnapshot: json(application.profileSnapshot),
         })),
       });
       await tx.statusEvent.createMany({

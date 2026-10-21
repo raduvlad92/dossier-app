@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DateFormat } from "@/generated/prisma/enums";
+import { agentExclusionsSchema } from "@/lib/agent/exclusion-settings";
 
 import { DATE_FORMATS, formatDocumentDate, maxPages, pagesInWords, settingsFromRows, settingValue, type SettingsData } from "./settings";
 
@@ -63,6 +64,13 @@ describe("stored settings", () => {
       adzunaKeyEnc: null,
       agentEnabled: false,
       agentQuery: { keywords: "", place: "", country: "", radiusKm: 25, remoteOnly: false, postedWithin: "any" },
+      agentQueries: [],
+      agentIntervalHours: 3,
+      agentMaxPages: 1,
+      agentExclusions: agentExclusionsSchema.parse({}),
+      agentCvSource: "profile",
+      agentExclusionHistory: [],
+      agentInspectionHistory: [],
       agentHour: 7,
       agentMinScore: 70,
       agentMaxScores: 15,
@@ -139,6 +147,24 @@ describe("stored settings", () => {
 });
 
 describe("the job agent's settings (E16)", () => {
+  it("round-trips recurring searches and safely defaults invalid scan bounds", () => {
+    const query = { keywords: "IT Manager", place: "Berlin", country: "de", radiusKm: 25, remoteOnly: false, postedWithin: "week" } as const;
+    const saved = { agentQueries: [query], agentIntervalHours: 6, agentMaxPages: 3, agentCvSource: "uploaded" } as const;
+    const rows = Object.entries(saved).map(([key, value]) => ({ key, value: JSON.stringify(value) }));
+    // Numeric and string settings are plain strings, lists are JSON.
+    rows[1].value = "6";
+    rows[2].value = "3";
+    rows[3].value = "uploaded";
+    expect(settingsFromRows(rows)).toMatchObject(saved);
+    expect(settingsFromRows([{ key: "agentIntervalHours", value: "2" }, { key: "agentMaxPages", value: "100" }, { key: "agentQueries", value: JSON.stringify(Array.from({ length: 11 }, () => query)) }])).toMatchObject({ agentIntervalHours: 3, agentMaxPages: 1, agentQueries: [] });
+  });
+
+  it("keeps a bounded durable record of inspection attempts", () => {
+    const agentInspectionHistory = [{ key: "job-key", at: "2026-10-20T07:00:00.000Z" }];
+    expect(settingsFromRows([{ key: "agentInspectionHistory", value: JSON.stringify(agentInspectionHistory) }]).agentInspectionHistory).toEqual(agentInspectionHistory);
+    expect(settingsFromRows([{ key: "agentInspectionHistory", value: JSON.stringify(Array.from({ length: 1001 }, () => agentInspectionHistory[0])) }]).agentInspectionHistory).toEqual([]);
+  });
+
   it("reads its search and runs as JSON, and values out of range as the defaults", () => {
     const query = { keywords: "Data scientist", place: "Berlin", country: "de", radiusKm: 50, remoteOnly: true, postedWithin: "week" } as const;
     const runs = [{ at: "2026-10-20T07:00:00.000Z", manual: false, message: "2 new postings scored." }];

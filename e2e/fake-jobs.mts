@@ -16,7 +16,7 @@ const job = (id: string, title: string, company: string, extra: Record<string, u
   job_publisher: "LinkedIn",
   job_apply_link: `https://jobs.example/${id}`,
   apply_options: [{ publisher: "LinkedIn", apply_link: `https://jobs.example/${id}`, is_direct: false }],
-  job_description: `${company} is hiring a ${title}.\n\nWhat you'll do\n- Design checkout flows\n- Work with research\n\nWhat we're looking for\n- 5+ years of product design\n- Strong prototyping skills in Figma`,
+  job_description: `${company} is hiring a ${title}.\n${company} builds its own software products.\n\nWhat you'll do\n- Design checkout flows\n- Work with research\n\nWhat we're looking for\n- 5+ years of product design\n- Strong prototyping skills in Figma`,
   job_is_remote: false,
   job_posted_at_datetime_utc: new Date(Date.now() - 2 * 86_400_000).toISOString(),
   job_location: "Rotterdam  •  via LinkedIn",
@@ -30,6 +30,19 @@ const firstPage = [
   job("e2e-tulip", "UX Designer", "Tulip Health", { job_is_remote: true, job_location: "Anywhere  •  via Indeed" }),
 ];
 const secondPage = [job("e2e-canal", "Design Systems Designer", "Canal Software")];
+
+// Recurring-watch fixtures: only one distinct job passes the language/employer rules.
+const watchDescription = "Harbor Products builds its own software products.\n\nWe are hiring a Head of IT to lead our internal IT operations and technology team.\nRequirements: IT leadership experience. English is required. Italian is preferred. German is optional.\nResponsibilities: manage internal systems, security, vendors and support.";
+const watchFirstPage = [
+  job("watch-allowed", "Head of IT", "Harbor Products", { job_description: watchDescription }),
+  job("watch-kpmg", "IT Manager", "KPMG", { job_description: "KPMG provides professional advisory services.\nWe are hiring an IT Manager. English is required." }),
+  job("watch-german-required", "TechOps Lead", "Internal Systems", { job_description: "Internal Systems builds its own software products.\nWe are hiring a TechOps Lead to run internal technology operations.\nRequirements: IT operations experience. English is required. German is required.\nResponsibilities: lead the internal support team and manage systems." }),
+];
+const watchSecondPage = [
+  job("watch-duplicate", "Head of IT", "Harbor Products", { job_apply_link: "https://jobs.example/watch-allowed", job_description: watchDescription }),
+  job("watch-german-ad", "IT Manager", "Eigenprodukt", { job_description: "Eigenprodukt entwickelt eigene Softwareprodukte.\nWir suchen eine IT-Leitung.\nAufgaben: Leiten Sie unser internes IT-Team und betreuen Sie unsere Systeme.\nAnforderungen: Erfahrung in der IT-Leitung. Englisch ist erforderlich." }),
+  job("watch-consultancy", "IT Manager", "Advisory Bridge", { job_description: "Advisory Bridge provides technology consulting to external clients.\nWe are hiring an IT Manager to deliver services to client organisations.\nRequirements: leadership experience. English is required.\nResponsibilities: manage client delivery, consulting teams and project systems." }),
+];
 
 function send(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { "content-type": "application/json" });
@@ -62,6 +75,10 @@ createServer((request, response) => {
   if (url.pathname === "/jsearch/search-v2") {
     if (request.headers["x-api-key"] !== JSEARCH_KEY) return send(response, 401, { status: "ERROR", error: { message: "Invalid API key" } });
     searches += 1;
+    if (/watch-e2e/i.test(url.searchParams.get("query") ?? "")) {
+      const second = url.searchParams.get("cursor") === "WATCH-PAGE-2";
+      return send(response, 200, { status: "OK", data: second ? { jobs: watchSecondPage, cursor: null } : { jobs: watchFirstPage, cursor: "WATCH-PAGE-2" } });
+    }
     // "nothing" finds nothing; otherwise two pages, joined by a cursor.
     if (/nothing/i.test(url.searchParams.get("query") ?? "")) return send(response, 200, { status: "OK", data: { jobs: [], cursor: null } });
     const second = url.searchParams.get("cursor") === "PAGE-2";

@@ -8,6 +8,7 @@ import { loadTaskOptions } from "@/lib/ai/task-options";
 import { tailorResume, writeCoverLetter } from "@/lib/ai/tasks";
 import { extractedSchema, matchSchema, unitsSchema } from "@/lib/application-data";
 import { loadProfile } from "@/lib/profile-data";
+import { cvProfileSchema } from "@/lib/agent/cv-profile";
 
 import { WRITE_DOCUMENTS_STEPS } from "./application-steps";
 import { defineJob } from "./runner";
@@ -29,11 +30,12 @@ export const writeDocumentsJob = defineJob({
     match: matchSchema,
     tone: z.enum(Tone),
     note: z.string().max(2000),
+    profileOverride: cvProfileSchema.optional(),
   }),
   result: z.object({ resume: unitsSchema, resumeWith: z.string(), letter: unitsSchema, letterWith: z.string() }),
-  async run({ posting, extracted, match, tone, note }, { step, signal }) {
+  async run({ posting, extracted, match, tone, note, profileOverride }, { step, signal }) {
     await step(WRITE_DOCUMENTS_STEPS[0]);
-    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), loadProfile()]);
+    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), profileOverride ?? loadProfile()]);
     const resume = await tailorResume(provider, { profile, extracted, match, note, posting }, { ...options, signal });
 
     await step(WRITE_DOCUMENTS_STEPS[1]);

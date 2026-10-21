@@ -13,6 +13,7 @@ import { logServerError } from "@/lib/log";
 import { describeTrim, fitResumeToPages } from "@/lib/page-limit";
 import { prisma } from "@/lib/prisma";
 import { loadProfile } from "@/lib/profile-data";
+import type { ProfileData } from "@/lib/profile";
 import { maxPages } from "@/lib/settings";
 import { loadSettings } from "@/lib/settings-data";
 
@@ -60,13 +61,14 @@ export type CreateApplicationInput = {
   tone: Tone;
   note: string;
   claim: ApplicationClaim;
+  profileOverride?: ProfileData;
 };
 
 const CLAIMED = "application:";
 
 /** Creates the application once; creating again with the same claim returns the one that exists. */
-export async function createApplicationFromDocuments({ reading, documents, match, details, postingUrl, tone, note, claim }: CreateApplicationInput): Promise<string> {
-  const [settings, profile] = await Promise.all([loadSettings(), loadProfile()]);
+export async function createApplicationFromDocuments({ reading, documents, match, details, postingUrl, tone, note, claim, profileOverride }: CreateApplicationInput): Promise<string> {
+  const [settings, profile] = await Promise.all([loadSettings(), profileOverride ?? loadProfile()]);
   const { extracted, extractedWith, matchedWith } = reading;
   const language = settings.docLanguage ?? extracted.language ?? "English";
   // E8-11: every part of the letter is a unit. The AI wrote the recipient
@@ -120,6 +122,7 @@ export async function createApplicationFromDocuments({ reading, documents, match
       data: {
         // An agent draft stays on the Agent screen until it's approved (#195).
         ...(claim.kind === "agent" ? { origin: ApplicationOrigin.AGENT, agentScore: claim.score, awaitingReview: true } : {}),
+        ...(profileOverride ? { profileSnapshot: JSON.parse(JSON.stringify(profile)) } : {}),
         title: details.title || [details.role, details.company].filter(Boolean).join(" · ") || "Untitled application",
         company: details.company,
         role: details.role,

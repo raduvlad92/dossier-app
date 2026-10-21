@@ -95,6 +95,7 @@ export function AboutSection({ facts, usagePing, updates }: { facts: AboutFacts;
   return (
     <>
       <SettingsSectionIntro title="About this install">Free and open source. No accounts, no subscriptions.</SettingsSectionIntro>
+      <p className="text-meta text-muted">This job-watch edition extends Dossier. <a className={LINK} href="https://github.com/raduvlad92/dossier-app" target="_blank" rel="noreferrer">View this edition&apos;s source code</a></p>
       <Card padding="none" className="px-7 py-2">
         <dl>
           {facts.map(({ label, value }) => (

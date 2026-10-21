@@ -10,14 +10,16 @@ import type { AgentRun } from "@/lib/settings";
 import { loadSettings } from "@/lib/settings-data";
 import { lastKnownTimeZone } from "@/lib/time-zone";
 
-import { AGENT_JOB_KEY, agentScanJob } from "./jobs";
+import { AGENT_JOB_KEY, agentScanJob, withAgentRunLock } from "./jobs";
+import { agentQueriesFor, agentSetupProblem } from "./run";
+import { runLimitProblem } from "./runs";
 
-// The job agent's daily run (E16-4): a timer in this process, like the
+// The job agent's recurring run: a timer in this process, like the
 // nightly backups and the inbox check, so it's only right with one instance.
-// Every 15 minutes it starts the day's run once the chosen hour has come, in
-// the user's time zone, not the server's (usually UTC in Docker).
+// Every minute it checks whether the interval has elapsed. Daily mode
+// retains the chosen hour in the user's time zone.
 
-const EVERY_MS = 15 * 60 * 1000;
+const EVERY_MS = 60 * 1000;
 
 /** The moment the run is due on `day`, at `hour` in `timeZone`. */
 const dueOn = (day: string, hour: number, timeZone: string) => {
@@ -29,13 +31,25 @@ const dueOn = (day: string, hour: number, timeZone: string) => {
 const ranToday = (runs: readonly AgentRun[], now: Date, timeZone: string) =>
   runs.some((run) => dayOf(new Date(run.at), timeZone) === dayOf(now, timeZone));
 
+const latestRun = (runs: readonly AgentRun[], now: Date) =>
+  runs.map((run) => Date.parse(run.at)).filter((at) => at <= now.getTime()).sort((a, b) => b - a)[0];
+
 /** Whether the day's run should start now: the hour has come, and nothing ran today. */
-export function scheduledRunDue(now: Date, hour: number, timeZone: string, runs: readonly AgentRun[]): boolean {
+export function scheduledRunDue(now: Date, hour: number, timeZone: string, runs: readonly AgentRun[], intervalHours = 24): boolean {
+  if (intervalHours !== 24) {
+    const last = latestRun(runs, now);
+    return last === undefined || now.getTime() >= last + intervalHours * 60 * 60 * 1000;
+  }
   return now >= dueOn(dayOf(now, timeZone), hour, timeZone) && !ranToday(runs, now, timeZone);
 }
 
 /** When the next scheduled run starts: today's, if it's still to come, else tomorrow's. */
-export function nextAgentRun(now: Date, hour: number, timeZone: string, runs: readonly AgentRun[]): Date {
+export function nextAgentRun(now: Date, hour: number, timeZone: string, runs: readonly AgentRun[], intervalHours = 24): Date {
+  if (intervalHours !== 24) {
+    const last = latestRun(runs, now);
+    const due = last === undefined ? now.getTime() : last + intervalHours * 60 * 60 * 1000;
+    return new Date(due > now.getTime() ? due : Math.ceil(now.getTime() / EVERY_MS) * EVERY_MS);
+  }
   const today = dayOf(now, timeZone);
   if (!ranToday(runs, now, timeZone)) {
     const due = dueOn(today, hour, timeZone);
@@ -47,11 +61,16 @@ export function nextAgentRun(now: Date, hour: number, timeZone: string, runs: re
 
 /** Starts the day's run when it's due and none is queued or running. */
 export async function startDueRun(now = new Date()): Promise<string | null> {
-  const settings = await loadSettings();
-  if (!settings.agentEnabled) return null;
-  if (!scheduledRunDue(now, settings.agentHour, await lastKnownTimeZone(), settings.agentRuns)) return null;
-  if ((await findUnfinishedJobs(AGENT_JOB_KEY)).length > 0) return null;
-  return startJob(agentScanJob, { manual: false }, { key: AGENT_JOB_KEY });
+  return withAgentRunLock(async () => {
+    const settings = await loadSettings();
+    if (!settings.agentEnabled) return null;
+    if (!scheduledRunDue(now, settings.agentHour, await lastKnownTimeZone(), settings.agentRuns, settings.agentIntervalHours)) return null;
+    if (runLimitProblem(settings.agentRuns, now, { manual: false })) return null;
+    if ((await findUnfinishedJobs(AGENT_JOB_KEY)).length > 0) return null;
+    // Setup failures do not record a source run; avoid queuing that same failure every minute.
+    if (await agentSetupProblem(agentQueriesFor(settings))) return null;
+    return startJob(agentScanJob, { manual: false }, { key: AGENT_JOB_KEY });
+  });
 }
 
 /** After a restart, a candidate left DRAFTING has no job to finish it. */

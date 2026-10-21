@@ -13,7 +13,7 @@ import { updateDocuments } from "@/lib/document-units";
 import { saveVersion } from "@/lib/document-versions";
 import { isParagraph } from "@/lib/letter-frame";
 import { prisma } from "@/lib/prisma";
-import { loadProfile } from "@/lib/profile-data";
+import { loadApplicationProfile } from "@/lib/agent/cv";
 
 import { defineJob } from "./runner";
 
@@ -44,7 +44,7 @@ export const writeEmailJob = defineJob({
     };
     const match = matchSchema.safeParse(application.match);
 
-    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), loadProfile()]);
+    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), loadApplicationProfile(applicationId)]);
     const { data, promptVersion } = await writeEmail(
       provider,
       {

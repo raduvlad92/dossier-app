@@ -5,14 +5,16 @@ import { z } from "zod";
 
 import { AgentCandidateStatus } from "@/generated/prisma/enums";
 import { agentDraftJob, approveCandidate, dismissCandidate, draftJobKey, restoreCandidate } from "@/lib/agent/draft";
-import { AGENT_JOB_KEY, agentScanJob } from "@/lib/agent/jobs";
-import { agentQueryReady, agentSetupProblem } from "@/lib/agent/run";
+import { AGENT_JOB_KEY, agentScanJob, withAgentRunLock } from "@/lib/agent/jobs";
+import { agentQueriesFor, agentQueryReady, agentSetupProblem } from "@/lib/agent/run";
+import { agentExclusionsSchema } from "@/lib/agent/exclusion-settings";
 import { runLimitProblem } from "@/lib/agent/runs";
 import { action, ActionError } from "@/lib/action";
 import { safeLink, searchQuerySchema } from "@/lib/job-search/search";
 import { findUnfinishedJobs, startJob } from "@/lib/jobs/runner";
 import { prisma } from "@/lib/prisma";
 import { loadSettings, saveSettings } from "@/lib/settings-data";
+import { agentIntervalHoursSchema } from "@/lib/settings";
 
 // The Agent screen's actions (E16). Nothing here ever sends anything:
 // approving only makes a draft a normal Draft application.
@@ -25,6 +27,11 @@ export const saveAgentSettings = action(
   z.object({
     enabled: z.boolean().optional(),
     query: searchQuerySchema.optional(),
+    queries: z.array(searchQuerySchema).max(10).optional(),
+    exclusions: agentExclusionsSchema.optional(),
+    intervalHours: agentIntervalHoursSchema.optional(),
+    maxPages: z.number().int().min(1).max(3).optional(),
+    cvSource: z.enum(["profile", "uploaded", "generated"]).optional(),
     hour: z.number().int().min(0).max(23).optional(),
     minScore: z.number().int().min(0).max(100).optional(),
     maxScores: z.number().int().min(1).max(30).optional(),
@@ -33,13 +40,19 @@ export const saveAgentSettings = action(
   }),
   async (changes) => {
     const settings = await loadSettings();
-    const query = changes.query ?? settings.agentQuery;
-    if (changes.enabled && !agentQueryReady(query)) {
+    const queries = agentQueriesFor({ agentQueries: changes.queries ?? settings.agentQueries, agentQuery: changes.query ?? settings.agentQuery });
+    const query = queries.find((query) => !agentQueryReady(query));
+    if ((changes.enabled ?? settings.agentEnabled) && query) {
       throw new ActionError(query.keywords.trim() ? "Choose a country for the search before turning the agent on." : "Type what the agent should look for before turning it on.");
     }
     await saveSettings({
       agentEnabled: changes.enabled,
       agentQuery: changes.query,
+      agentQueries: changes.queries,
+      agentExclusions: changes.exclusions,
+      agentIntervalHours: changes.intervalHours,
+      agentMaxPages: changes.maxPages,
+      agentCvSource: changes.cvSource,
       agentHour: changes.hour,
       agentMinScore: changes.minScore,
       agentMaxScores: changes.maxScores,
@@ -56,10 +69,10 @@ export const saveAgentSettings = action(
  * one and within the daily limit. A run already queued or running is
  * reused rather than started again.
  */
-export const runAgentNow = action(z.object({}), async () => {
+export const runAgentNow = action(z.object({}), async () => withAgentRunLock(async () => {
   const settings = await loadSettings();
   if (!settings.agentEnabled) throw new ActionError("Turn the job agent on in Settings → Job agent first.");
-  const setup = await agentSetupProblem(settings.agentQuery);
+  const setup = await agentSetupProblem(agentQueriesFor(settings));
   if (setup) throw new ActionError(setup);
   const [unfinished] = await findUnfinishedJobs(AGENT_JOB_KEY);
   if (unfinished) return { jobId: unfinished.id, reused: true };
@@ -68,7 +81,7 @@ export const runAgentNow = action(z.object({}), async () => {
   const jobId = await startJob(agentScanJob, { manual: true }, { key: AGENT_JOB_KEY });
   revalidatePath("/agent");
   return { jobId, reused: false };
-});
+}));
 
 const candidateId = z.string().min(1).max(100);
 

@@ -15,6 +15,15 @@ vi.mock("@/lib/prisma", async () => {
 });
 const zone = vi.hoisted(() => ({ value: "Europe/Berlin" }));
 vi.mock("@/lib/time-zone", () => ({ lastKnownTimeZone: async () => zone.value }));
+vi.mock("@/lib/ai/config", () => ({ isAiConfigured: async () => true }));
+vi.mock("@/lib/agent/cv", async () => {
+  const { demoProfile } = await import("@/lib/demo-profile");
+  return { loadAgentProfile: async () => demoProfile() };
+});
+vi.mock("@/lib/job-search/config", () => ({
+  loadJobSearchConfig: async () => ({ source: "JSEARCH" }),
+  credentialsFor: () => ({ key: "key", host: "openwebninja" }),
+}));
 vi.mock("@/lib/jobs/runner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/jobs/runner")>()),
   startJob: vi.fn(async () => "agent-job"),
@@ -26,6 +35,7 @@ const run = (at: string, manual = false): AgentRun => ({ at, manual, message: nu
 beforeEach(async () => {
   zone.value = "Europe/Berlin";
   await resetDatabase(prisma());
+  await saveSettings({ agentQuery: { keywords: "IT Manager", country: "de", place: "", radiusKm: 25, remoteOnly: false, postedWithin: "any" } });
 });
 afterAll(() => prisma().$disconnect());
 
@@ -60,7 +70,7 @@ describe("when the daily run is due (E16-4)", () => {
 
   it("says the next run is today's while it's still to come, and soon when it's overdue", () => {
     expect(nextAgentRun(new Date("2026-10-20T03:00:00Z"), 7, "Europe/Berlin", []).toISOString()).toBe("2026-10-20T05:00:00.000Z");
-    expect(nextAgentRun(new Date("2026-10-20T05:07:00Z"), 7, "Europe/Berlin", []).toISOString()).toBe("2026-10-20T05:15:00.000Z");
+    expect(nextAgentRun(new Date("2026-10-20T05:07:30Z"), 7, "Europe/Berlin", []).toISOString()).toBe("2026-10-20T05:08:00.000Z");
   });
 });
 
@@ -75,20 +85,30 @@ describe("the limits (E16-4)", () => {
     expect(runLimitProblem([run("2026-10-20T11:35:00Z")], now, { manual: false })).toBeNull();
   });
 
-  it("allows 3 runs in any 24 hours", () => {
-    const three = [run("2026-10-20T11:00:00Z"), run("2026-10-20T08:00:00Z"), run("2026-10-19T13:00:00Z")];
-    expect(runLimitProblem(three, now, { manual: false })).toBe("The agent has run 3 times in the past 24 hours, as many as it may. Try again in 1 hour.");
-    expect(runLimitProblem(three, new Date("2026-10-20T13:00:01Z"), { manual: false })).toBeNull();
-    expect(runLimitProblem(three.slice(0, 2), now, { manual: false })).toBeNull();
+  it("allows twelve runs in any 24 hours, including eight scheduled scans and extra manual ones", () => {
+    const twelve = [...Array.from({ length: 11 }, (_, index) => run(new Date(now.getTime() - (index + 1) * 3600000).toISOString())), run("2026-10-19T13:00:00Z")];
+    expect(runLimitProblem(twelve, now, { manual: false })).toBe("The agent has run 12 times in the past 24 hours, as many as it may. Try again in 1 hour.");
+    expect(runLimitProblem(twelve, new Date("2026-10-20T13:00:01Z"), { manual: false })).toBeNull();
+    expect(runLimitProblem(twelve.slice(0, 11), now, { manual: false })).toBeNull();
   });
 });
 
 describe("the schedule (E16-4)", () => {
+  it("does not queue repeated setup failures while an enabled search is incomplete", async () => {
+    const { startJob } = await import("@/lib/jobs/runner");
+    vi.mocked(startJob).mockClear();
+    await saveSettings({ agentEnabled: true, agentQueries: [{ keywords: "Head of IT", country: "", place: "", radiusKm: 25, remoteOnly: false, postedWithin: "any" }] });
+    expect(await startDueRun(new Date("2026-10-20T06:00:00Z"))).toBeNull();
+    expect(await startDueRun(new Date("2026-10-20T06:01:00Z"))).toBeNull();
+    expect(startJob).not.toHaveBeenCalled();
+    expect(await prisma().job.count()).toBe(0);
+  });
+
   it("starts the day's run when it's due and the agent is on, once", async () => {
     const { startJob } = await import("@/lib/jobs/runner");
     const due = new Date("2026-10-20T06:00:00Z");
     expect(await startDueRun(due)).toBeNull();
-    await saveSettings({ agentEnabled: true });
+    await saveSettings({ agentEnabled: true, agentIntervalHours: 24 });
     expect(await startDueRun(due)).toBe("agent-job");
     expect(startJob).toHaveBeenCalledWith(expect.objectContaining({ type: "agent-scan" }), { manual: false }, { key: "agent" });
 
@@ -100,6 +120,27 @@ describe("the schedule (E16-4)", () => {
     expect(await startDueRun(new Date("2026-10-20T04:00:00Z"))).toBeNull();
     await saveSettings({ agentRuns: [run("2026-10-20T05:00:00Z")] });
     expect(await startDueRun(due)).toBeNull();
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it("catches up once after downtime, then waits a full three hours from that run", async () => {
+    const due = new Date("2026-10-20T06:00:00Z");
+    const old = [run("2026-10-18T06:00:00Z")];
+    expect(scheduledRunDue(due, 7, "Europe/Berlin", old, 3)).toBe(true);
+    expect(nextAgentRun(due, 7, "Europe/Berlin", old, 3)).toEqual(due);
+    const caughtUp = [run(due.toISOString()), ...old];
+    expect(scheduledRunDue(new Date("2026-10-20T08:59:59Z"), 7, "Europe/Berlin", caughtUp, 3)).toBe(false);
+    expect(scheduledRunDue(new Date("2026-10-20T09:00:00Z"), 7, "Europe/Berlin", caughtUp, 3)).toBe(true);
+    expect(nextAgentRun(due, 7, "Europe/Berlin", caughtUp, 3).toISOString()).toBe("2026-10-20T09:00:00.000Z");
+  });
+
+  it("does not queue repeated attempts while the daily allowance is full", async () => {
+    const { startJob } = await import("@/lib/jobs/runner");
+    vi.mocked(startJob).mockClear();
+    const now = new Date("2026-10-20T23:00:00Z");
+    await saveSettings({ agentEnabled: true, agentIntervalHours: 3, agentRuns: Array.from({ length: 12 }, (_, index) => run(new Date(now.getTime() - (index + 4) * 3600000).toISOString())) });
+    expect(await startDueRun(now)).toBeNull();
+    expect(await startDueRun(new Date(now.getTime() + 15 * 60000))).toBeNull();
     expect(startJob).not.toHaveBeenCalled();
   });
 

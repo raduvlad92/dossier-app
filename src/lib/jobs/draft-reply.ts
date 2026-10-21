@@ -10,6 +10,7 @@ import { extractedOf } from "@/lib/application-data";
 import { proposeSlots, workingHours } from "@/lib/google/availability";
 import { formatSlot } from "@/lib/google/slots";
 import { prisma } from "@/lib/prisma";
+import { loadApplicationProfile } from "@/lib/agent/cv";
 import { loadProfile } from "@/lib/profile-data";
 
 import { defineJob } from "./runner";
@@ -57,7 +58,7 @@ export const draftReplyJob = defineJob({
       take: 4,
       select: { direction: true, fromName: true, body: true },
     });
-    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), loadProfile()]);
+    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), application ? loadApplicationProfile(application.id) : loadProfile()]);
     const { data, promptVersion } = await draftReply(
       provider,
       {

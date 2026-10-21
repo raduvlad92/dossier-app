@@ -7,6 +7,7 @@ import { loadTaskOptions } from "@/lib/ai/task-options";
 import { extractPosting, matchRequirements } from "@/lib/ai/tasks";
 import { extractedSchema, matchSchema } from "@/lib/application-data";
 import { loadProfile } from "@/lib/profile-data";
+import { cvProfileSchema } from "@/lib/agent/cv-profile";
 
 import { READ_POSTING_STEPS } from "./application-steps";
 import { defineJob } from "./runner";
@@ -17,16 +18,16 @@ import { defineJob } from "./runner";
  */
 export const readPostingJob = defineJob({
   type: "read-posting",
-  input: z.object({ posting: z.string().trim().min(1).max(100_000) }),
+  input: z.object({ posting: z.string().trim().min(1).max(100_000), profileOverride: cvProfileSchema.optional() }),
   result: z.object({
     extracted: extractedSchema,
     extractedWith: z.string(),
     match: matchSchema,
     matchedWith: z.string(),
   }),
-  async run({ posting }, { step, signal }) {
+  async run({ posting, profileOverride }, { step, signal }) {
     await step(READ_POSTING_STEPS[0]);
-    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), loadProfile()]);
+    const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), profileOverride ?? loadProfile()]);
 
     await step(READ_POSTING_STEPS[1]);
     const extraction = await extractPosting(provider, { posting }, { ...options, signal });

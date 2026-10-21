@@ -19,6 +19,8 @@ import { prisma } from "@/lib/prisma";
 import { loadSettings } from "@/lib/settings-data";
 
 import { DISMISSED_TRIM } from "./candidates";
+import { loadAgentProfile } from "./cv";
+import { filterAgentPosting } from "./exclusions";
 
 // A candidate's draft (E16-5): written the way New application writes one,
 // kept off Applications until it's approved (#195), and never sent.
@@ -77,16 +79,21 @@ export async function draftCandidate(candidateId: string, context: JobContext): 
   try {
     const found = foundFromCandidate(candidate);
     // The source may have given only a snippet; the whole text writes a better draft.
-    const description = (await fullText(found)) ?? candidate.description;
+    const completeText = await fullText(found);
+    const description = completeText ?? candidate.description;
     if (!description.trim()) throw new ActionError("That posting has no text to write from. Open it and start an application by hand.");
     const posting = postingText({ ...found, description });
+    const settings = await loadSettings();
+    // Filters may have changed since this candidate was scored.
+    const decision = await filterAgentPosting({ ...found, description, complete: found.complete || Boolean(completeText) }, settings.agentExclusions, context.signal);
+    if (!decision.allowed) throw new ActionError(decision.reason ?? "This posting is excluded by your current rules.");
+    const profile = await loadAgentProfile(settings.agentCvSource);
 
     await context.step(`Reading the posting from ${name}`);
-    const reading = await readPostingJob.run({ posting }, context);
+    const reading = await readPostingJob.run({ posting, profileOverride: profile }, context);
     await context.step(`Writing the draft for ${name}`);
-    const settings = await loadSettings();
     const documents = await writeDocumentsJob.run(
-      { readJobId: context.id, posting, extracted: reading.extracted, match: reading.match, tone: settings.defaultTone, note: "" },
+      { readJobId: context.id, posting, extracted: reading.extracted, match: reading.match, tone: settings.defaultTone, note: "", profileOverride: profile },
       context,
     );
     // Keep the whole text, so a retry doesn't fetch it again.
@@ -103,6 +110,7 @@ export async function draftCandidate(candidateId: string, context: JobContext): 
       tone: settings.defaultTone,
       note: "",
       claim: { kind: "agent", candidateId, score: candidate.score },
+      profileOverride: profile,
     });
     // The job holds nothing of the draft, but goes with it all the same.
     await prisma.job.updateMany({ where: { id: context.id }, data: { applicationId } });

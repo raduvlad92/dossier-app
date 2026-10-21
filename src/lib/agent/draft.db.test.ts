@@ -36,6 +36,13 @@ vi.mock("@/lib/ai", async (importOriginal) => ({
     new MockProvider({
       reply: (call) => {
         switch (call.json?.name) {
+          case "agent_posting_exclusions": {
+            const evidence = call.messages[0].content.match(/<posting>\n([\s\S]*?)\n<\/posting>/)?.[1]?.split("\n")[0] ?? "";
+            return {
+              contentComplete: true, postingLanguage: "english", postingLanguageEvidence: evidence,
+              languageRequirementsCertain: true, languageRequirements: [], employerIsConsultancy: "no", consultancyEvidence: "Ledgerly",
+            };
+          }
           case "extracted_posting":
             return {
               title: "Senior Product Designer · Ledgerly",
@@ -94,6 +101,12 @@ beforeEach(async () => {
 afterAll(() => prisma().$disconnect());
 
 describe("preparing a draft (E16-5)", () => {
+  it("rechecks current exclusions before spending on documents for an older candidate", async () => {
+    const { id } = await candidate({ ...posting, company: "KPMG" });
+    await expect(draftCandidate(id, context())).rejects.toThrow("exclusion list");
+    expect(await prisma().application.count()).toBe(0);
+    expect(await prisma().agentCandidate.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "SCORED", error: expect.stringContaining("exclusion list") });
+  });
   it("writes it like New application, as an agent draft waiting for review", async () => {
     const { id } = await candidate();
     await prisma().job.create({ data: { id: "draft-job", type: "agent-draft", key: `agent-candidate:${id}`, status: "RUNNING", input: { candidateId: id } } });

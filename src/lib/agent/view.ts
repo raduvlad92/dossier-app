@@ -12,7 +12,7 @@ import { lastKnownTimeZone } from "@/lib/time-zone";
 
 import { stringsOf } from "./candidates";
 import { AGENT_JOB_KEY } from "./jobs";
-import { agentSetupProblem } from "./run";
+import { agentQueriesFor, agentSetupProblem } from "./run";
 import { AGENT_MAX_RUNS_PER_DAY, runsInPastDay } from "./runs";
 import { nextAgentRun } from "./schedule";
 
@@ -100,12 +100,12 @@ export async function loadAgentView(now = new Date()): Promise<AgentView> {
   ]);
   const draftJob = new Map(draftJobs.map((job) => [job.key?.replace(/^agent-candidate:/, ""), job.id]));
 
-  const query = settings.agentQuery;
+  const queries = agentQueriesFor(settings);
   const source: JobSource | null = config.source;
-  const search = query.keywords.trim()
-    ? `${describeSearch(query, countryName(query.country) || query.country.toUpperCase())}${source ? ` · via ${SOURCE_INFO[source].name}` : ""}`
+  const search = queries.some((query) => query.keywords.trim())
+    ? `${queries.filter((query) => query.keywords.trim()).map((query) => describeSearch(query, countryName(query.country) || query.country.toUpperCase())).join("; ")}${source ? ` · via ${SOURCE_INFO[source].name}` : ""}`
     : null;
-  const setupProblem = await agentSetupProblem(query);
+  const setupProblem = await agentSetupProblem(queries);
 
   const view = (candidate: (typeof candidates)[number]): AgentCandidateView => ({
     id: candidate.id,
@@ -141,7 +141,7 @@ export async function loadAgentView(now = new Date()): Promise<AgentView> {
     setupSection: setupProblem ? sectionOf(setupProblem) : null,
     limitReached: runsInPastDay(settings.agentRuns, now).length >= AGENT_MAX_RUNS_PER_DAY,
     lastRun: last ? { at: formatDateTime(new Date(last.at), timeZone, now), message: last.message } : null,
-    nextRun: settings.agentEnabled ? formatDateTime(nextAgentRun(now, settings.agentHour, timeZone, settings.agentRuns), timeZone, now) : null,
+    nextRun: settings.agentEnabled ? formatDateTime(nextAgentRun(now, settings.agentHour, timeZone, settings.agentRuns, settings.agentIntervalHours), timeZone, now) : null,
     runJobId: runJobs[0]?.id ?? null,
     drafts,
     scored: waiting.filter((candidate) => candidate.score >= settings.agentMinScore).map(view),

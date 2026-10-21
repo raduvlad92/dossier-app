@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,13 +36,14 @@ describe("Settings → Job agent (E16-7)", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(toggle).toHaveAccessibleDescription("Off. Nothing is searched or scored until it's on.");
     await user.click(toggle);
-    expect(saveAgentSettings).toHaveBeenCalledWith({ enabled: true, query: initial.query });
-    expect(toggle).toHaveAccessibleDescription(/^On\. It runs once a day after 07:00 your time \(Europe\/Berlin\)/);
+    expect(saveAgentSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, query: initial.query, queries: [initial.query], intervalHours: 3 }));
+    expect(toggle).toHaveAccessibleDescription(/^On\. It checks your saved searches every 3 hours\./);
   });
 
   it("needs keywords and a country to turn on", async () => {
     const user = userEvent.setup();
-    open({ initial: { ...initial, query: { ...initial.query, keywords: "", country: "" } } });
+    const query = { ...initial.query, keywords: "", country: "" };
+    open({ initial: { ...initial, query, queries: [query] } });
     await user.click(screen.getByRole("switch", { name: "Run the job agent" }));
     expect(saveAgentSettings).not.toHaveBeenCalled();
     expect(screen.getByLabelText("What")).toHaveAccessibleDescription("Type what the agent should look for.");
@@ -54,12 +55,16 @@ describe("Settings → Job agent (E16-7)", () => {
     const user = userEvent.setup();
     open();
     await user.type(screen.getByLabelText("What"), " NLP");
-    await waitFor(() => expect(saveAgentSettings).toHaveBeenLastCalledWith({ query: { ...initial.query, keywords: "Data scientist NLP" } }), { timeout: 2000 });
+    const query = { ...initial.query, keywords: "Data scientist NLP" };
+    await waitFor(() => expect(saveAgentSettings).toHaveBeenLastCalledWith({ queries: [query], query }), { timeout: 2000 });
+    expect(screen.queryByLabelText("Runs after")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Check for new jobs"), "Every day");
+    expect(saveAgentSettings).toHaveBeenLastCalledWith({ intervalHours: 24 });
     await user.selectOptions(screen.getByLabelText("Runs after"), "09:00");
     expect(saveAgentSettings).toHaveBeenLastCalledWith({ hour: 9 });
     await user.selectOptions(screen.getByLabelText("Minimum score"), "80 of 100");
     expect(saveAgentSettings).toHaveBeenLastCalledWith({ minScore: 80 });
-    await user.selectOptions(screen.getByLabelText("Postings scored per run"), "20");
+    await user.selectOptions(screen.getByLabelText("Postings checked per run"), "20");
     expect(saveAgentSettings).toHaveBeenLastCalledWith({ maxScores: 20 });
   });
 
@@ -78,7 +83,65 @@ describe("Settings → Job agent (E16-7)", () => {
 
   it("explains the limits in plain words", () => {
     open();
-    expect(screen.getByText(/^One search a day, and at most three in any 24 hours\. Each run scores up to 15 postings\./)).toBeInTheDocument();
+    expect(screen.getByText(/^Each run searches up to 1 result page across 1 search and checks up to 15 postings\./)).toHaveTextContent("at most 12 runs in 24 hours, including manual runs");
+  });
+
+  it("seeds the requested roles only when no previous search exists, without turning on", () => {
+    open({ initial: { ...initial, query: { ...initial.query, keywords: "" }, queries: [] } });
+    expect(screen.getAllByLabelText("What").map((input) => (input as HTMLInputElement).value)).toEqual(["Head of IT", "TechOps Lead", "IT Manager"]);
+    expect(screen.getAllByLabelText("Where").every((input) => (input as HTMLInputElement).value === "Berlin")).toBe(true);
+    expect(screen.getByRole("switch", { name: "Run the job agent" })).toHaveAttribute("aria-checked", "false");
+    expect(saveAgentSettings).not.toHaveBeenCalled();
+  });
+
+  it("edits and removes independent targets and validates every search", async () => {
+    const user = userEvent.setup();
+    open();
+    await user.click(screen.getByRole("button", { name: "Add another search" }));
+    const second = screen.getByRole("group", { name: "Search 2" });
+    await user.click(screen.getByRole("switch", { name: "Run the job agent" }));
+    expect(within(second).getByLabelText("What")).toHaveAccessibleDescription("Type what the agent should look for.");
+    expect(screen.getByRole("switch", { name: "Run the job agent" })).toHaveAttribute("aria-checked", "false");
+    await user.type(within(second).getByLabelText("What"), "IT Manager");
+    await user.click(screen.getByRole("switch", { name: "Run the job agent" }));
+    expect(saveAgentSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, queries: [initial.query, { ...initial.query, keywords: "IT Manager" }] }));
+    await user.click(screen.getByRole("button", { name: "Remove search 1" }));
+    expect(screen.getByLabelText("What")).toHaveValue("IT Manager");
+    await waitFor(() => expect(saveAgentSettings).toHaveBeenLastCalledWith({ query: { ...initial.query, keywords: "IT Manager" }, queries: [{ ...initial.query, keywords: "IT Manager" }] }));
+  });
+
+  it("limits the watch to ten searches", () => {
+    open({ initial: { ...initial, queries: Array.from({ length: 10 }, (_, i) => ({ ...initial.query, keywords: `Role ${i + 1}` })) } });
+    expect(screen.getByRole("button", { name: "Add another search" })).toBeDisabled();
+    expect(screen.getAllByRole("group")).toHaveLength(10);
+  });
+
+  it("defaults to English ads, English or Italian requirements and consultancy exclusions", async () => {
+    const user = userEvent.setup();
+    open();
+    expect(screen.getByRole("switch", { name: "Only postings written in English" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Allowed required languages")).toHaveValue("English, Italian");
+    expect(screen.getByRole("switch", { name: "Exclude consultancy groups" })).toHaveAttribute("aria-checked", "true");
+    expect((screen.getByLabelText("Excluded companies") as HTMLTextAreaElement).value).toContain("KPMG\nDeloitte");
+    await user.click(screen.getByRole("switch", { name: "Exclude consultancy groups" }));
+    expect(saveAgentSettings).toHaveBeenLastCalledWith({ exclusions: expect.objectContaining({ englishOnly: true, allowedLanguages: ["English", "Italian"], excludeConsultancies: false, companies: expect.arrayContaining(["KPMG", "Deloitte"]) }) });
+    await user.clear(screen.getByLabelText("Excluded companies"));
+    await user.type(screen.getByLabelText("Excluded companies"), "KPMG\nDeloitte, Example Group");
+    await user.tab();
+    await waitFor(() => expect(saveAgentSettings).toHaveBeenLastCalledWith({ exclusions: expect.objectContaining({ companies: ["KPMG", "Deloitte", "Example Group"], excludeConsultancies: false }) }));
+  });
+
+  it("lets the user choose their profile, uploaded CV or Dossier base CV", async () => {
+    const user = userEvent.setup();
+    open({ uploadedCvName: "my-cv.pdf" });
+    expect(screen.getByLabelText("Use as my CV")).toHaveValue("profile");
+    await user.selectOptions(screen.getByLabelText("Use as my CV"), "generated");
+    expect(saveAgentSettings).toHaveBeenLastCalledWith({ cvSource: "generated" });
+    expect(screen.getByRole("link", { name: "Base resume" })).toHaveAttribute("href", "/resume");
+    await user.selectOptions(screen.getByLabelText("Use as my CV"), "uploaded");
+    expect(saveAgentSettings).toHaveBeenLastCalledWith({ cvSource: "uploaded" });
+    expect(screen.getByText("Stored CV: my-cv.pdf")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save uploaded CV" })).toBeDisabled();
   });
 
   it("points to the source or AI provider while one isn't set up", () => {

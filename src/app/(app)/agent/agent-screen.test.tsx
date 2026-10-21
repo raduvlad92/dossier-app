@@ -159,7 +159,7 @@ describe("AgentScreen (E16-6)", () => {
     second.unmount();
 
     open({ limitReached: true });
-    expect(screen.getByRole("note")).toHaveTextContent("The agent has run 3 times in the past 24 hours");
+    expect(screen.getByRole("note")).toHaveTextContent("The agent has reached its limit of 12 runs in the past 24 hours");
   });
 
   it("says when there's nothing yet", () => {

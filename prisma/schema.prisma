@@ -344,6 +344,8 @@ model Application {
   origin              ApplicationOrigin @default(MANUAL)
   /// The agent's score for the posting, when the agent prepared it.
   agentScore          Int?
+  /// The chosen factual CV for an agent draft; preserves its roles and contact details.
+  profileSnapshot     Json?
   /// An agent draft not approved yet: only the Agent screen shows it (#195).
   awaitingReview      Boolean           @default(false)
   title               String            @default("")

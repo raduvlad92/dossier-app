@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { AiProvider, Creativity, DateFormat, PaperSize, Tone } from "@/generated/prisma/enums";
 import { EMPTY_QUERY, JOB_SOURCES, JSEARCH_HOSTS, searchQuerySchema } from "@/lib/job-search/search";
+import { agentExclusionsSchema } from "@/lib/agent/exclusion-settings";
 
 /** Date styles for documents (SET-6), labelled with an example as in the prototype. */
 export const DATE_FORMATS: readonly { value: DateFormat; label: string }[] = [
@@ -96,7 +97,10 @@ export const agentRunSchema = z.object({
 });
 export type AgentRun = z.infer<typeof agentRunSchema>;
 /** How many runs are kept: more than a day's worth, for the limit and the screen. */
-export const AGENT_RUNS_KEPT = 10;
+export const AGENT_RUNS_KEPT = 40;
+
+export const AGENT_INTERVAL_HOURS = [3, 6, 12, 24] as const;
+export const agentIntervalHoursSchema = z.literal(AGENT_INTERVAL_HOURS);
 
 export const settingsSchema = z.object({
   // AI provider (SET-1). Null means "not set in the app": fall back to the
@@ -151,11 +155,31 @@ export const settingsSchema = z.object({
   jsearchHost: z.enum(JSEARCH_HOSTS).catch("openwebninja"),
   adzunaAppId: z.string().nullable().catch(null),
   adzunaKeyEnc: z.string().nullable().catch(null),
-  // Job agent (E16): one search, run once a day. Off until it's turned on.
+  // Job agent: recurring searches. Off until it's turned on.
   // It asks the source in Settings → Job search, with its key.
   agentEnabled: flag(false),
   /** The search it runs, as Find jobs asks it; it needs keywords and a country to run. */
   agentQuery: json(searchQuerySchema).catch(EMPTY_QUERY),
+  /** Each role/location to monitor. An empty list keeps the original single search. */
+  agentQueries: json(z.array(searchQuerySchema).max(10)).catch([]),
+  agentIntervalHours: z.coerce.number().pipe(agentIntervalHoursSchema).catch(3),
+  /** Maximum pages requested per search, with one shared scoring budget. */
+  agentMaxPages: z.coerce.number().int().min(1).max(3).catch(1),
+  agentExclusions: json(agentExclusionsSchema).catch(agentExclusionsSchema.parse({})),
+  /** Profile, the original uploaded CV, or a generated application CV. */
+  agentCvSource: z.enum(["profile", "uploaded", "generated"]).catch("profile"),
+  /** Recent rejections, so the same excluded ads cannot use every run's inspection budget. */
+  agentExclusionHistory: json(z.array(z.object({
+    key: z.string(),
+    fingerprint: z.string(),
+    reason: z.string(),
+    checkedAt: z.iso.datetime(),
+  })).max(1000)).catch([]),
+  /** Recent attempts keep uncertain ads from monopolizing later scans. */
+  agentInspectionHistory: json(z.array(z.object({
+    key: z.string(),
+    at: z.iso.datetime(),
+  })).max(1000)).catch([]),
   /** The hour of the day it runs, in the user's time zone. */
   agentHour: z.coerce.number().int().min(0).max(23).catch(7),
   /** Postings scored below this stay out of the queue. */

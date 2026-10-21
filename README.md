@@ -1,3 +1,5 @@
+> This is the custom [recurring job-watch fork](JOB-WATCH.md), with multiple search targets, English/Italian and consultancy exclusions, CV choice, and optional external parsers. The upstream installation commands below use upstream images; build this fork's Dockerfile to run these additions.
+
 <p align="center">
   <img src="src/app/icon.svg" alt="" width="80" height="80">
 </p>
@@ -10,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/AienTech/dossier/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/AienTech/dossier?label=release"></a>
-  <a href="https://github.com/AienTech/dossier/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/AienTech/dossier/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/raduvlad92/dossier-app/actions/workflows/ci.yml"><img alt="Fork CI" src="https://github.com/raduvlad92/dossier-app/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
   <a href="https://github.com/AienTech/dossier/pkgs/container/dossier"><img alt="Docker image: ghcr.io/aientech/dossier" src="https://img.shields.io/badge/image-ghcr.io%2Faientech%2Fdossier-2496ED?logo=docker&logoColor=white"></a>
   <img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs">

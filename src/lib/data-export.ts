@@ -26,6 +26,8 @@ import {
 import { decryptApiKey } from "@/lib/ai/api-key";
 import { decryptSecret, JOB_SOURCE_KEY } from "@/lib/secrets";
 import { appVersion } from "@/lib/version";
+import { AGENT_CV_SECRET } from "@/lib/agent/cv";
+import { cvProfileSchema } from "@/lib/agent/cv-profile";
 
 // Everything a user keeps in Dossier as one JSON file (E10-4, SET-10): the
 // profile, custom themes, settings and applications with their history,
@@ -44,7 +46,7 @@ export const EXPORT_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3];
 /** The setting that holds the encrypted API key, which only this server can read. */
 const API_KEY_SETTING = "apiKeyEnc";
 /** The settings that hold encrypted keys, which only this server can read: never exported as they are. */
-export const SECRET_SETTINGS: readonly string[] = [API_KEY_SETTING, "jsearchKeyEnc", "adzunaKeyEnc"];
+export const SECRET_SETTINGS: readonly string[] = [API_KEY_SETTING, "jsearchKeyEnc", "adzunaKeyEnc", "agentCvUploadEnc", "agentParserKeyEnc"];
 /** The settings that belong to this install rather than its data (the usage ping's and its consent, the update check's, the Google client and the browser's time zone): never exported, and kept by an import. */
 export const INSTALL_SETTINGS: readonly string[] = [
   "usagePingId",
@@ -54,6 +56,10 @@ export const INSTALL_SETTINGS: readonly string[] = [
   "usagePingChoiceText",
   // The job agent's runs count against this server's job source key (E16).
   "agentRuns",
+  "agentCvUploadName",
+  "agentExclusionHistory",
+  "agentInspectionHistory",
+  "agentParserConfig",
   "latestVersion",
   "latestVersionUrl",
   "updateCheckDay",
@@ -194,6 +200,7 @@ const application = z.object({
   /** The job agent's (E16); absent in older files, which hold only the user's own. */
   origin: z.enum(ApplicationOrigin).optional(),
   agentScore: int.nullable().optional(),
+  profileSnapshot: z.unknown().nullable().optional(),
   awaitingReview: z.boolean().optional(),
   archivedAt: optionalDate,
   createdAt: date,
@@ -266,6 +273,7 @@ const postingSearch = z.object({
 
 /** An export file as read back (E10-6). */
 export const exportSchema = z.object({
+  agentCv: z.object({ name: z.string(), profile: cvProfileSchema }).optional(),
   format: z.literal(EXPORT_FORMAT),
   schemaVersion: z.literal([1, 2, 3]),
   appVersion: text,
@@ -354,6 +362,14 @@ export async function buildExport(
       }
     };
     const apiKey = readable(stored(API_KEY_SETTING), (value) => decryptApiKey(value));
+    const savedCv = settings.find((setting) => setting.key === "agentCvUploadEnc")?.value;
+    const cvText = readable(savedCv, (value) => decryptSecret(AGENT_CV_SECRET, value));
+    let agentCv: { name: string; profile: z.infer<typeof cvProfileSchema> } | undefined;
+    if (cvText) {
+      try {
+        agentCv = { name: settings.find((setting) => setting.key === "agentCvUploadName")?.value ?? "My CV", profile: cvProfileSchema.parse(JSON.parse(cvText)) };
+      } catch { /* Unreadable private CVs are never exported as ciphertext. */ }
+    }
     const jobSourceKeys = Object.fromEntries(
       Object.entries({
         jsearch: readable(stored("jsearchKeyEnc"), (value) => decryptSecret(JOB_SOURCE_KEY, value)),
@@ -365,6 +381,7 @@ export async function buildExport(
       format: EXPORT_FORMAT,
       schemaVersion: EXPORT_SCHEMA_VERSION,
       appVersion,
+      ...(agentCv ? { agentCv } : {}),
       exportedAt: now,
       profile: {
         fields,
@@ -376,7 +393,7 @@ export async function buildExport(
         references,
       },
       themes,
-      settings: settings.filter((setting) => !SECRET_SETTINGS.includes(setting.key) && !INSTALL_SETTINGS.includes(setting.key)),
+      settings: settings.filter((setting) => !SECRET_SETTINGS.includes(setting.key) && !INSTALL_SETTINGS.includes(setting.key) && !setting.key.startsWith("agent-parser:")),
       ...(apiKey ? { apiKey } : {}),
       ...(Object.keys(jobSourceKeys).length > 0 ? { jobSourceKeys } : {}),
       applications,

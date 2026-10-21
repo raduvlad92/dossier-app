@@ -27,6 +27,7 @@ beforeEach(async () => {
   await resetDatabase(prisma());
   await saveSettings({
     agentEnabled: true,
+    agentIntervalHours: 24,
     agentQuery: { keywords: "Data scientist", place: "Berlin", country: "de", radiusKm: 25, remoteOnly: false, postedWithin: "any" },
     agentRuns: [{ at: "2026-10-20T05:00:00Z", manual: false, message: "2 new postings are waiting for a look." }],
   });
@@ -64,7 +65,7 @@ describe("the Agent screen's data (E16-6)", () => {
     await saveSettings({
       agentEnabled: false,
       agentQuery: { keywords: "", place: "", country: "", radiusKm: 25, remoteOnly: false, postedWithin: "any" },
-      agentRuns: ["09:30", "08:00", "06:00"].map((time) => ({ at: `2026-10-20T${time}:00Z`, manual: true, message: null })),
+      agentRuns: Array.from({ length: 12 }, (_, index) => ({ at: new Date(now.getTime() - (index + 1) * 3600000).toISOString(), manual: true, message: null })),
     });
     expect(await loadAgentView(now)).toMatchObject({
       enabled: false,
