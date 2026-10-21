@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,12 +13,16 @@ vi.mock("next/link", () => ({
 }));
 
 let systemDark = false;
+let narrowScreen = false;
+const viewportListeners = new Set<() => void>();
 beforeEach(() => {
   systemDark = false;
+  narrowScreen = false;
+  viewportListeners.clear();
   vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: query.includes("dark") && systemDark,
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    get matches() { return query.includes("max-width") ? narrowScreen : query.includes("dark") && systemDark; },
+    addEventListener: (_event: string, listener: () => void) => { if (query.includes("max-width")) viewportListeners.add(listener); },
+    removeEventListener: (_event: string, listener: () => void) => { if (query.includes("max-width")) viewportListeners.delete(listener); },
   }));
 });
 afterEach(() => {
@@ -55,6 +59,33 @@ describe("SidebarFrame", () => {
   it("starts collapsed when it was left that way", () => {
     renderSidebar(true);
     expect(screen.getByRole("complementary")).toHaveAttribute("data-collapsed", "true");
+  });
+
+  it("starts with an icon rail on mobile and leaves the desktop preference alone", async () => {
+    narrowScreen = true;
+    document.cookie = "dossier_sidebar=expanded; path=/";
+    renderSidebar();
+    const sidebar = screen.getByRole("complementary");
+    expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(sidebar).not.toHaveAttribute("data-collapsed");
+    expect(sidebar).toHaveClass("fixed");
+    await userEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    expect(document.cookie).toContain("dossier_sidebar=expanded");
+
+    act(() => { narrowScreen = false; viewportListeners.forEach((listener) => listener()); });
+    expect(sidebar).not.toHaveAttribute("data-collapsed");
+    expect(sidebar).toHaveClass("sticky");
+  });
+
+  it("restores a collapsed desktop preference after resizing through mobile", async () => {
+    renderSidebar(true);
+    act(() => { narrowScreen = true; viewportListeners.forEach((listener) => listener()); });
+    await userEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    act(() => { narrowScreen = false; viewportListeners.forEach((listener) => listener()); });
+    expect(screen.getByRole("complementary")).toHaveAttribute("data-collapsed", "true");
+    expect(document.cookie).not.toContain("dossier_sidebar=expanded");
   });
 });
 

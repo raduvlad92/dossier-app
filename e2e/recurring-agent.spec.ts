@@ -59,3 +59,41 @@ test("persists multiple searches and exclusions, follows pages, and scores only 
   expect(scores).toEqual([{ title: "Head of IT", company: "Harbor Products" }]);
   await expect(page.getByText(/Excluded 4:/).first()).toBeVisible();
 });
+
+test("keeps the job watch usable at 320px and 390px without changing the desktop sidebar preference", async ({ page, baseURL }) => {
+  await page.context().addCookies([{ name: "dossier_sidebar", value: "expanded", url: baseURL! }]);
+
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings?section=agent");
+    const sidebar = page.getByRole("complementary");
+    const main = page.getByRole("main");
+    // The sidebar animates its width, so measure after the rail has settled.
+    await expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(48);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+
+    for (const input of await page.getByLabel("What", { exact: true }).all()) {
+      await input.scrollIntoViewIfNeeded();
+      await expect(input).toBeVisible();
+      await expect(input).toBeInViewport({ ratio: 1 });
+      expect(await input.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.left >= 0 && bounds.right <= window.innerWidth;
+      })).toBe(true);
+    }
+
+    const mainWidth = await main.evaluate((element) => element.getBoundingClientRect().width);
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect(sidebar).not.toHaveAttribute("data-collapsed");
+    await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(260);
+    await expect.poll(() => main.evaluate((element) => element.getBoundingClientRect().width)).toBe(mainWidth);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(48);
+    await expect.poll(() => main.evaluate((element) => element.getBoundingClientRect().width)).toBe(mainWidth);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+    expect((await page.context().cookies()).find((cookie) => cookie.name === "dossier_sidebar")?.value).toBe("expanded");
+  }
+});
