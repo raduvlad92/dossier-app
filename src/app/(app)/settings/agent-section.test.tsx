@@ -21,6 +21,7 @@ const initial: AgentSettings = {
 };
 const countries = [
   { code: "de", name: "Germany" },
+  { code: "it", name: "Italy" },
   { code: "nl", name: "Netherlands" },
 ];
 const open = (props: Partial<Parameters<typeof AgentSection>[0]> = {}) =>
@@ -114,6 +115,22 @@ describe("Settings → Job agent (E16-7)", () => {
     open({ initial: { ...initial, queries: Array.from({ length: 10 }, (_, i) => ({ ...initial.query, keywords: `Role ${i + 1}` })) } });
     expect(screen.getByRole("button", { name: "Add another search" })).toBeDisabled();
     expect(screen.getAllByRole("group")).toHaveLength(10);
+  });
+
+  it("inherits current location and remote preferences when adding a job target", async () => {
+    const user = userEvent.setup();
+    const query = { ...initial.query, place: "Rome", country: "it", radiusKm: 100 as const, remoteOnly: true, postedWithin: "month" as const };
+    open({ initial: { ...initial, query } });
+    await user.click(screen.getByRole("button", { name: "Add another search" }));
+    const second = within(screen.getByRole("group", { name: "Search 2" }));
+    expect(second.getByLabelText("Where")).toHaveValue("Rome");
+    expect(second.getByLabelText("Country")).toHaveValue("it");
+    expect(second.getByLabelText("Within")).toHaveValue("100");
+    expect(second.getByLabelText("Posted")).toHaveValue("month");
+    expect(second.getByRole("checkbox", { name: "Remote only" })).toBeChecked();
+    await user.type(second.getByLabelText("What"), "TechOps Lead");
+    await user.click(screen.getByRole("switch", { name: "Run the job agent" }));
+    expect(saveAgentSettings).toHaveBeenCalledWith(expect.objectContaining({ queries: [query, { ...query, keywords: "TechOps Lead" }] }));
   });
 
   it("defaults to English ads, English or Italian requirements and consultancy exclusions", async () => {

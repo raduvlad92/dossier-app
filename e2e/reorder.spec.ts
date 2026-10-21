@@ -8,7 +8,7 @@ test.beforeAll(resetData);
 
 /** The role titles in the order the cards show them. */
 const roles = (page: Page) =>
-  page.locator("button[aria-expanded]").evaluateAll((buttons) => buttons.map((button) => button.querySelector("span span")?.textContent));
+  page.getByRole("main").locator("button[aria-expanded]").evaluateAll((buttons) => buttons.map((button) => button.querySelector("span span")?.textContent));
 
 test("moves roles by keyboard and by dragging, and the resume follows", async ({ page }) => {
   await page.goto("/profile?section=experience");
@@ -27,7 +27,7 @@ test("moves roles by keyboard and by dragging, and the resume follows", async ({
   const card = page.locator("div.rounded-panel", { has: page.getByRole("button", { name: /^Product Designer/, expanded: false }) });
   const handle = card.getByTitle("Drag to reorder");
   const from = (await handle.boundingBox())!;
-  const top = (await page.locator("button[aria-expanded]").first().boundingBox())!;
+  const top = (await page.getByRole("main").locator("button[aria-expanded]").first().boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(from.x + from.width / 2, from.y - 20, { steps: 5 });

@@ -4,8 +4,10 @@ import { headers } from "next/headers";
 import { isAiConfigured, loadAiConfig, loadAiSettingsView } from "@/lib/ai/config";
 import { agentCvUploadName } from "@/lib/agent/cv";
 import { parserSettingsView } from "@/lib/agent/parser-config";
+import { loadAgentSearchDefaults } from "@/lib/agent/search-defaults";
 import { jobSearchView, loadJobSearchConfig } from "@/lib/job-search/config";
 import { COUNTRIES } from "@/lib/job-search/countries";
+import type { SearchQuery } from "@/lib/job-search/search";
 import { loadSearch } from "@/lib/posting-searches";
 import { providerOption } from "@/lib/ai/provider-options";
 import { lastNightlyBackup } from "@/lib/backup-schedule";
@@ -58,8 +60,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
           <AgentSection
             initial={{
               enabled: settings.agentEnabled,
-              // With no search of its own yet, it starts from the last one in Find jobs.
-              query: settings.agentQuery.keywords.trim() ? settings.agentQuery : ((await loadSearch())?.query ?? settings.agentQuery),
+              query: await initialAgentQuery(settings.agentQueries[0] ?? settings.agentQuery, settings.agentQueries.length > 0),
               hour: settings.agentHour,
               minScore: settings.agentMinScore,
               maxScores: settings.agentMaxScores,
@@ -141,6 +142,19 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
       )}
     </SettingsScreen>
   );
+}
+
+/** Saved agent criteria, then the latest Find jobs search, then the profile's location. */
+async function initialAgentQuery(query: SearchQuery, savedTarget: boolean): Promise<SearchQuery> {
+  const hasSavedQuery = savedTarget || Boolean(await prisma.setting.findUnique({ where: { key: "agentQuery" }, select: { key: true } }));
+  return loadAgentSearchDefaults(hasSavedQuery ? query : null, {
+    latestSearch: async () => (await loadSearch())?.query ?? null,
+    profileLocation: async () => {
+      const fields = await prisma.profileField.findMany({ where: { key: { in: ["city", "country"] } } });
+      const field = (key: string) => fields.find((entry) => entry.key === key)?.value ?? "";
+      return { city: field("city"), country: field("country") };
+    },
+  });
 }
 
 /** The connection as the Google section shows it: never a token. */

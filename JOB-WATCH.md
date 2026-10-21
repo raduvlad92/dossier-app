@@ -3,6 +3,7 @@
 This fork extends upstream Dossier 1.8.0. Configure it in **Settings → Job agent**, then use **Agent** to review matches and drafts.
 
 - Save up to ten searches, each with its own title, country, location, radius, recency and remote preference. Suggested starting titles are Head of IT, TechOps Lead and IT Manager.
+- New targets inherit the first saved target's location and filters. Initial setup keeps saved agent preferences, otherwise the latest Find jobs search, then your profile location. Every target remains editable.
 - Repeat every 3, 6 or 12 hours, or daily at a chosen local hour. The single persistent app instance checks the schedule every minute, resumes after restart, and runs one catch-up search rather than replaying missed intervals. The browser can be closed.
 - Search one to three result pages per target. All targets share one inspection/scoring budget and one draft budget. Eight scheduled searches per day fit the twelve-run rolling daily limit; manual runs wait at least an hour.
 - Deduplicate by source identity and canonical job link across targets, pages and past candidates. Saved, dismissed and already applied jobs are skipped.

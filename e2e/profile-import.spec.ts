@@ -70,7 +70,7 @@ test("replaces the profile after asking", async ({ page }) => {
   await page.getByRole("alertdialog").getByRole("button", { name: "Replace my profile" }).click();
   await expect(page).toHaveURL("/profile");
   await page.goto("/profile?section=experience");
-  await expect(page.locator("button[aria-expanded]")).toHaveCount(1);
+  await expect(page.getByRole("main").locator("button[aria-expanded]")).toHaveCount(1);
   await expect(page.getByRole("button", { name: /^Design Lead.*Acme Payments/, expanded: false })).toBeVisible();
 });
 

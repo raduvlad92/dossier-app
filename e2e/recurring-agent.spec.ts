@@ -8,6 +8,26 @@ test.afterAll(async () => {
   await sql(`DELETE FROM "AgentCandidate"`);
 });
 
+test("keeps saved location and remote preferences while suggesting multiple roles", async ({ page }) => {
+  for (const query of [
+    { keywords: "", place: "Rome", country: "it", radiusKm: 100, remoteOnly: true, postedWithin: "month" },
+    { keywords: "", place: "", country: "", radiusKm: 25, remoteOnly: false, postedWithin: "any" },
+  ]) {
+    await sql(`INSERT INTO "Setting" (key, value, "updatedAt") VALUES ('agentQuery', $1, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [JSON.stringify(query)]);
+    await page.goto("/settings?section=agent");
+    await expect(page.getByLabel("What", { exact: true })).toHaveCount(3);
+    for (const search of await page.getByRole("group", { name: /^Search \d+$/ }).all()) {
+      await expect(search.getByLabel("Where", { exact: true })).toHaveValue(query.place);
+      await expect(search.getByLabel("Country", { exact: true })).toHaveValue(query.country);
+      await expect(search.getByLabel("Within", { exact: true })).toHaveValue(String(query.radiusKm));
+      await expect(search.getByLabel("Posted", { exact: true })).toHaveValue(query.postedWithin);
+      await expect(search.getByRole("checkbox", { name: "Remote only" })).toBeChecked({ checked: query.remoteOnly });
+    }
+    expect(await sql<{ value: string }>(`SELECT value FROM "Setting" WHERE key = 'agentQuery'`)).toEqual([{ value: JSON.stringify(query) }]);
+  }
+  await sql(`DELETE FROM "Setting" WHERE key = 'agentQuery'`);
+});
+
 test("persists multiple searches and exclusions, follows pages, and scores only one eligible unique job", async ({ page }) => {
   await page.goto("/settings?section=agent");
   while (await page.getByRole("group", { name: /^Search \d+$/ }).count() < 3) {
