@@ -32,11 +32,15 @@ type Unit = { id: string; label: string; text: string };
 let emails = 0;
 /** Score-call evidence lets agent specs prove excluded employers never reach scoring. */
 const agentScores: { title: string; company: string }[] = [];
+/** All model requests, so reload/history assertions cover checks as well as scores. */
+const modelRequests: { path: string; schema: string | null }[] = [];
 
 const answers: Record<string, (messages: Message[]) => unknown> = {
   agent_posting_exclusions: (messages) => {
     const content = messages[1].content;
     const description = content.match(/<posting>\n([\s\S]*?)\n<\/posting>/)?.[1] ?? "";
+    // The manual German-body fixture deliberately gets an incorrect English
+    // label here. Its real prose must still be rejected by the independent gate.
     const germanAd = description.includes("Wir suchen eine IT-Leitung.");
     const consultancy = description.includes("provides technology consulting to external clients.");
     const languages: { languages: string[]; obligation: "required" | "preferred"; match: "all"; evidence: string }[] = [];
@@ -228,7 +232,9 @@ createServer((request, response) => {
   };
   if (request.method === "GET" && request.url === "/health") return send(200, { ok: true });
   if (request.method === "GET" && request.url === "/agent-scores") return send(200, { scores: agentScores });
+  if (request.method === "GET" && request.url === "/requests") return send(200, { requests: modelRequests });
   if (request.method === "GET" && request.url === "/v1/models") {
+    modelRequests.push({ path: request.url, schema: null });
     return send(200, { object: "list", data: [{ id: "fake-model", object: "model", created: 0, owned_by: "e2e" }] });
   }
   if (request.method !== "POST" || request.url !== "/v1/chat/completions") return send(404, { error: { message: "Not found" } });
@@ -238,6 +244,7 @@ createServer((request, response) => {
   request.on("end", () => {
     const body = JSON.parse(raw) as Request;
     const name = body.response_format?.json_schema?.name;
+    modelRequests.push({ path: request.url!, schema: name ?? null });
     const answer = name && answers[name];
     if (!answer) return send(400, { error: { message: `No fake answer for "${name}".` } });
     // A moment of "thinking", so progress shows as it would.

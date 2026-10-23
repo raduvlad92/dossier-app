@@ -35,7 +35,7 @@ describe("Settings → Job agent (E16-7)", () => {
     open();
     const toggle = screen.getByRole("switch", { name: "Run the job agent" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(toggle).toHaveAccessibleDescription("Off. Nothing is searched or scored until it's on.");
+    expect(toggle).toHaveAccessibleDescription("Off. Scheduled searches and scoring are paused. Your search rules still apply to Find jobs.");
     await user.click(toggle);
     expect(saveAgentSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, query: initial.query, queries: [initial.query], intervalHours: 3 }));
     expect(toggle).toHaveAccessibleDescription(/^On\. It checks your saved searches every 3 hours\./);
@@ -136,6 +136,7 @@ describe("Settings → Job agent (E16-7)", () => {
   it("defaults to English ads, English or Italian requirements and consultancy exclusions", async () => {
     const user = userEvent.setup();
     open();
+    expect(screen.getByText(/These rules apply to manual Find jobs searches and scheduled Job agent searches, even when the agent is off/)).toHaveTextContent("Saved and dismissed postings remain in your history.");
     expect(screen.getByRole("switch", { name: "Only postings written in English" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByLabelText("Allowed required languages")).toHaveValue("English, Italian");
     expect(screen.getByRole("switch", { name: "Exclude consultancy groups" })).toHaveAttribute("aria-checked", "true");

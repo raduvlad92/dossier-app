@@ -6,6 +6,7 @@ import { defaultSearch, latestRole, queryFromParams, viewFromParams } from "@/li
 import { countSearches, listSearches, loadSearch } from "@/lib/posting-searches";
 import { countPostings, listPostings } from "@/lib/postings";
 import { prisma } from "@/lib/prisma";
+import { loadSettings } from "@/lib/settings-data";
 import { userTimeZone } from "@/lib/time-zone";
 
 import { JobsScreen } from "./jobs-screen";
@@ -24,7 +25,15 @@ export default async function JobsPage({ searchParams }: PageProps<"/jobs">) {
   const view = viewFromParams(params);
   const typed = queryFromParams(params);
   const searchId = typeof params.search === "string" ? params.search : undefined;
-  const [config, timeZone, postingCounts, searches] = await Promise.all([loadJobSearchConfig(), userTimeZone(), countPostings(), countSearches()]);
+  const [config, timeZone, postingCounts, searches, settings] = await Promise.all([loadJobSearchConfig(), userTimeZone(), countPostings(), countSearches(), loadSettings()]);
+  // Only display labels cross the client boundary; provider settings stay on the server.
+  const rules = settings.agentExclusions;
+  const filterRules = [
+    ...(rules.englishOnly ? ["English-only postings"] : []),
+    ...(rules.allowedLanguages.length ? [`Required languages limited to ${rules.allowedLanguages.join(" or ")}`] : []),
+    ...(rules.excludeConsultancies ? ["No consultancy groups"] : []),
+    ...(rules.companies.length ? [`${rules.companies.length} excluded ${rules.companies.length === 1 ? "company" : "companies"}`] : []),
+  ];
   const now = new Date();
 
   const search = view === "search" && !typed ? await loadSearch(searchId, { timeZone, now }) : null;
@@ -41,6 +50,7 @@ export default async function JobsPage({ searchParams }: PageProps<"/jobs">) {
       view={view}
       query={typed ?? search?.query ?? (await latestQuery()) ?? (await profileSearch())}
       search={search}
+      filterRules={filterRules}
       missingSearch={Boolean(searchId) && !search}
       kept={kept}
       history={history}

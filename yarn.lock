@@ -4485,6 +4485,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"collapse-white-space@npm:^2.0.0":
+  version: 2.1.0
+  resolution: "collapse-white-space@npm:2.1.0"
+  checksum: 10c0/b2e2800f4ab261e62eb27a1fbe853378296e3a726d6695117ed033e82d61fb6abeae4ffc1465d5454499e237005de9cfc52c9562dc7ca4ac759b9a222ef14453
+  languageName: node
+  linkType: hard
+
 "color-convert@npm:^2.0.1":
   version: 2.0.1
   resolution: "color-convert@npm:2.0.1"
@@ -4959,6 +4966,7 @@ __metadata:
     eslint: "npm:^9"
     eslint-config-next: "npm:16.3.6"
     fflate: "npm:^0.8.3"
+    franc-min: "npm:6.2.0"
     jose: "npm:^6.2.12"
     jsdom: "npm:^30.1.1"
     lucide-react: "npm:^1.59.0"
@@ -5854,6 +5862,15 @@ __metadata:
     cross-spawn: "npm:^7.0.6"
     signal-exit: "npm:^4.0.1"
   checksum: 10c0/8986e4af2430896e65bc2788d6679067294d6aee9545daefc84923a0a4b399ad9c7a3ea7bd8c0b2b80fdf4a92de4c69df3f628233ff3224260e9c1541a9e9ed3
+  languageName: node
+  linkType: hard
+
+"franc-min@npm:6.2.0":
+  version: 6.2.0
+  resolution: "franc-min@npm:6.2.0"
+  dependencies:
+    trigram-utils: "npm:^2.0.0"
+  checksum: 10c0/21c243982b713a7726ffdb185415636c63711e7267be301b6d0607e3533f76771f2396091d9f1ca017f98357e4aa885c0cf4a2c0f90012e138f741cd9cfb5e45
   languageName: node
   linkType: hard
 
@@ -7235,6 +7252,13 @@ __metadata:
   peerDependencies:
     "@types/node": ">= 8"
   checksum: 10c0/12205aeb5d5a6902aa02b6e5ef6b717eb695db48bed07a2ded80f726fe05379c13118452da5f23788114b0a3d8976883e5f5e097e482426349977866d822b00d
+  languageName: node
+  linkType: hard
+
+"n-gram@npm:^2.0.0":
+  version: 2.0.2
+  resolution: "n-gram@npm:2.0.2"
+  checksum: 10c0/72e2cdc8c37c9253b556a0deb9cd26d5ac59a5d7a38b2d2928927e3959bc7d3cb591d766e30309a4c685dbc51330025cb30c5c6518ee516caf3318aed2635f1b
   languageName: node
   linkType: hard
 
@@ -8951,6 +8975,16 @@ __metadata:
   dependencies:
     punycode: "npm:^2.3.1"
   checksum: 10c0/83130df2f649228aa91c17754b66248030a3af34911d713b5ea417066fa338aa4bc8668d06bd98aa21a2210f43fc0a3db8b9099e7747fb5830e40e39a6a1058e
+  languageName: node
+  linkType: hard
+
+"trigram-utils@npm:^2.0.0":
+  version: 2.0.1
+  resolution: "trigram-utils@npm:2.0.1"
+  dependencies:
+    collapse-white-space: "npm:^2.0.0"
+    n-gram: "npm:^2.0.0"
+  checksum: 10c0/d024dc91a9c0310e75fa68422185e3a32814831971b9e86a2925e74bd1932a30501aa2ac214768f0a545f3db63610ee14b4748ac31532e1bc46c791941d71c6d
   languageName: node
   linkType: hard
 

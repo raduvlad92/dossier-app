@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { useRouter } from "next/navigation";
+import { useId, useRef, useState, useTransition, type KeyboardEvent, type ReactNode, type Ref } from "react";
 
 import { ScoreBadge } from "@/components/score-badge";
 import { toast, toastResult } from "@/components/toast";
@@ -13,7 +14,7 @@ import type { JobView } from "@/lib/jobs/runner";
 import { postedAgo, postingKey, type FoundPosting, type PostingState, type ShownPosting, type StoredSearch } from "@/lib/job-search/search";
 import { SOURCE_INFO } from "@/lib/job-search/sources";
 
-import { dismissFoundPosting, loadFullText, restorePosting, savePostingForLater, showMorePostings, startScoringPosting, unsavePosting } from "./actions";
+import { dismissFoundPosting, loadFullText, recheckJobSearch, restorePosting, savePostingForLater, showMorePostings, startScoringPosting, unsavePosting } from "./actions";
 import { useStartApplication } from "./use-start-application";
 
 /** Narrow windows show the posting above the list. */
@@ -40,10 +41,27 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
  * (E14-7), which leave the list when they're no longer saved or dismissed.
  */
 export function PostingResults(props: PostingResultsProps) {
+  const incoming = props.mode === "search" ? props.search : props.postings;
+  const [snapshot, setSnapshot] = useState({ incoming, mode: props.mode, revision: 0 });
+  // A server refresh or Back can change the same search's verified rows. Reset
+  // before rendering children so old rows/details and pending requests cannot survive it.
+  if (incoming !== snapshot.incoming || props.mode !== snapshot.mode) {
+    setSnapshot({ incoming, mode: props.mode, revision: snapshot.revision + 1 });
+  }
+  return <PostingResultsView key={snapshot.revision} {...props} />;
+}
+
+function PostingResultsView(props: PostingResultsProps) {
   const { mode } = props;
+  const router = useRouter();
   const [postings, setPostings] = useState(mode === "search" ? props.search.postings : props.postings);
+  const [detailRevision, setDetailRevision] = useState(0);
   const [next, setNext] = useState(mode === "search" ? props.search.next : null);
+  const [filtering, setFiltering] = useState(mode === "search" ? props.search.filtering : undefined);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [rechecking, startRecheck] = useTransition();
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const busy = loadingMore || rechecking || (props.mode === "search" && props.searching);
   const [showDismissed, setShowDismissed] = useState(false);
   const inView = ({ state }: ShownPosting) => (mode === "saved" ? state.saved : mode === "dismissed" ? state.dismissed : showDismissed || !state.dismissed);
   const visible = postings.filter(inView);
@@ -130,15 +148,46 @@ export function PostingResults(props: PostingResultsProps) {
   };
 
   const showMore = async () => {
-    if (props.mode !== "search" || !next || loadingMore) return;
+    if (props.mode !== "search" || !next || busy) return;
     setLoadingMore(true);
-    const result = await showMorePostings({ searchId: props.search.id });
-    setLoadingMore(false);
-    if (!result.ok) return void toast(result.error);
-    if (!result.data.ok) return void toast(result.data.message);
-    const seen = new Set(postings.map(postingKey));
-    setPostings([...postings, ...result.data.postings.filter((posting) => !seen.has(postingKey(posting)))]);
-    setNext(result.data.next);
+    setOperationError(null);
+    try {
+      const result = await showMorePostings({ searchId: props.search.id });
+      if (!result.ok) return failOperation(result.error);
+      if (!result.data.ok) return failOperation(result.data.message);
+      const page = result.data;
+      setPostings(page.postings);
+      // The same posting may now have different verified text in this snapshot.
+      setDetailRevision((revision) => revision + 1);
+      setNext(page.next);
+      // This is the summary for the whole stored search, including earlier pages.
+      setFiltering(page.filtering);
+    } catch {
+      failOperation("More results couldn't be loaded. Try again.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const failOperation = (message: string) => {
+    setOperationError(message);
+    toast(message);
+  };
+
+  const recheck = () => {
+    if (props.mode !== "search" || busy) return;
+    const searchId = props.search.id;
+    setOperationError(null);
+    startRecheck(async () => {
+      try {
+        const result = await recheckJobSearch({ searchId });
+        if (!result.ok) return failOperation(result.error);
+        if (!result.data.ok) return failOperation(result.data.message);
+        router.refresh();
+      } catch {
+        failOperation("Saved results couldn't be rechecked. Try again.");
+      }
+    });
   };
 
   const searched = props.mode === "search" ? props.search.query : null;
@@ -149,18 +198,24 @@ export function PostingResults(props: PostingResultsProps) {
         ? "Nothing dismissed. Postings you dismiss stay out of your searches and wait here."
         : postings.length > 0 || !searched
           ? "You've dismissed every posting here."
+          : filtering && filtering.total > 0
+            ? filtering.unchecked > 0
+              ? "No eligible postings are ready to show. Unchecked results stay hidden until they are verified against your current rules."
+              : "No results match your current rules. Excluded postings remain stored with this search."
           : `No postings for “${searched.keywords}”${searched.place ? ` within ${searched.radiusKm} km of ${searched.place}` : ""}. Try a bigger radius or fewer words.`;
 
   return (
     <div className="flex flex-wrap items-start gap-6 px-10 pb-16">
+      <p className="sr-only" role="status">{rechecking ? "Rechecking saved results…" : loadingMore ? "Loading more results…" : props.mode === "search" && !filtering ? `${postings.length} postings found.` : ""}</p>
       {Object.entries(scoring).map(([key, { jobId }]) =>
         jobId ? <ScoreWatcher key={jobId} jobId={jobId} onChange={(job) => scoringChanged(key, job)} /> : null,
       )}
-      <div className="flex min-w-0 flex-[1_1_340px] flex-col gap-3">
+      <div aria-busy={busy || undefined} className="flex min-w-0 flex-[1_1_340px] flex-col gap-3">
+        {operationError && <p role="alert" className="text-sm text-warning">{operationError}</p>}
         <p className={cn("flex flex-wrap items-baseline gap-x-3 gap-y-1 text-meta text-muted", mode !== "search" && visible.length === 0 && "hidden")}>
           <span>
             {props.mode === "search"
-              ? `${plural(postings.length, "posting", "postings")} from ${SOURCE_INFO[props.search.source].name}${next ? ", more to come" : ""} · searched ${props.search.ranAt}`
+              ? `${filtering ? `${plural(filtering.eligible, "eligible posting", "eligible postings")} of ${plural(filtering.total, "source result", "source results")}` : plural(postings.length, "posting", "postings")} from ${SOURCE_INFO[props.search.source].name}${next ? ", more to come" : ""} · searched ${props.search.ranAt}`
               : mode === "saved"
                 ? plural(visible.length, "saved posting", "saved postings")
                 : `${plural(visible.length, "dismissed posting", "dismissed postings")}, kept out of your searches`}
@@ -168,8 +223,8 @@ export function PostingResults(props: PostingResultsProps) {
           {props.mode === "search" && (
             <button
               type="button"
-              onClick={props.searching ? undefined : props.onSearchAgain}
-              aria-disabled={props.searching || undefined}
+              onClick={busy ? undefined : props.onSearchAgain}
+              aria-disabled={busy || undefined}
               className="underline underline-offset-3 hover:text-ink aria-disabled:text-faint"
             >
               Search again
@@ -187,6 +242,32 @@ export function PostingResults(props: PostingResultsProps) {
           )}
         </p>
 
+        {filtering && (
+          <div className="flex flex-col gap-2 text-meta text-muted">
+            <p role="status" aria-atomic="true">{filtering.eligible} eligible · {filtering.excluded} excluded · {filtering.unchecked} unchecked · {filtering.total} source results</p>
+            {filtering.reasons.length > 0 && (
+              <details>
+                <summary className="cursor-pointer underline underline-offset-3">Why results are hidden</summary>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  {filtering.reasons.map(({ reason, count }) => <li key={reason}>{reason} ({count})</li>)}
+                </ul>
+              </details>
+            )}
+            {filtering.unchecked > 0 && (
+              <div className="flex flex-col items-start gap-2 rounded-card border border-line-card bg-card p-4">
+                <p>Recheck saved results with your AI provider to verify them against your current rules. This does not run a new search of job sources.</p>
+                <Button variant="secondary" size="sm" onClick={recheck} disabled={busy} aria-disabled={busy || undefined}>
+                  {rechecking ? "Rechecking saved results…" : "Recheck saved results"}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode !== "search" && (
+          <p className="text-meta text-muted">Saved and dismissed postings remain here for your history. Scoring and starting an application check your <Link href="/settings?section=agent" className="underline underline-offset-3">current rules</Link>.</p>
+        )}
+
         {visible.length === 0 ? (
           <div className="rounded-panel border border-line-card bg-card px-5 py-9 text-center text-sm text-muted">{empty}</div>
         ) : (
@@ -201,7 +282,7 @@ export function PostingResults(props: PostingResultsProps) {
         )}
 
         {next && (
-          <Button variant="secondary" className="self-start" onClick={() => void showMore()} aria-disabled={loadingMore || undefined}>
+          <Button variant="secondary" className="self-start" onClick={() => void showMore()} disabled={busy} aria-disabled={busy || undefined}>
             {loadingMore ? "Loading more…" : "Show more"}
           </Button>
         )}
@@ -209,7 +290,7 @@ export function PostingResults(props: PostingResultsProps) {
 
       {selected && (
         <PostingDetail
-          key={postingKey(selected)}
+          key={`${detailRevision}:${postingKey(selected)}`}
           ref={detail}
           posting={selected}
           now={now}
@@ -396,7 +477,7 @@ function Fit({ fit }: { fit: PostingFit }) {
   );
 }
 
-type Text = { status: "ready"; text: string } | { status: "loading" } | { status: "partial"; text: string };
+type Text = { status: "ready" | "partial"; text: string };
 
 /** The selected posting: its facts, what to do with it, and its whole text. */
 function PostingDetail({
@@ -427,21 +508,25 @@ function PostingDetail({
   const headingId = useId();
   // The posting as first shown; the component is keyed by it.
   const [initial] = useState(posting);
-  const [text, setText] = useState<Text>(initial.complete ? { status: "ready", text: initial.description } : { status: "loading" });
+  const [text, setText] = useState<Text>({ status: initial.complete ? "ready" : "partial", text: initial.description });
+  const [loadingText, startLoadingText] = useTransition();
+  const [textError, setTextError] = useState<string | null>(null);
 
-  // A source that only sent the start: ask for the rest (E14-2, E14-3).
-  useEffect(() => {
-    if (initial.complete) return;
-    let current = true;
-    void loadFullText({ posting: withoutState(initial) }).then((result) => {
-      if (!current) return;
-      const full = result.ok ? result.data.text : null;
-      setText(full ? { status: "ready", text: full } : { status: "partial", text: initial.description });
+  // Eligibility checks can use providers, so loading the rest is always explicit.
+  const loadText = () => {
+    if (loadingText || text.status === "ready") return;
+    setTextError(null);
+    startLoadingText(async () => {
+      try {
+        const result = await loadFullText({ posting: withoutState(initial) });
+        if (!result.ok) return setTextError(result.error);
+        if (result.data.text) setText({ status: "ready", text: result.data.text });
+        else setTextError("The full text isn't available right now. Try again or open the posting's page.");
+      } catch {
+        setTextError("The full text couldn't be loaded. Try again.");
+      }
     });
-    return () => {
-      current = false;
-    };
-  }, [initial]);
+  };
 
   const { state } = posting;
   const ago = postedAgo(posting.postedAt, now);
@@ -507,21 +592,19 @@ function PostingDetail({
       )}
 
       {/* Only the text scrolls, so the title and actions stay in view; focusable, so it scrolls from the keyboard too. */}
-      <div tabIndex={0} role="region" aria-label="Posting text" className="-mx-1 min-h-0 flex-1 overflow-y-auto border-t border-line px-1 pt-4">
-        {text.status === "loading" ? (
-          <p role="status" className="text-sm text-muted">
-            Getting the whole posting…
-          </p>
-        ) : (
-          <>
-            {text.status === "partial" && (
-              <p className="mb-3 rounded-card bg-warning-surface px-4 py-3 text-meta text-warning">
-                This is only the start of the posting. When you start an application, you can paste the rest from the posting&apos;s page.
-              </p>
-            )}
-            <div className="text-sm leading-relaxed whitespace-pre-line">{text.text || "The source didn't send a description."}</div>
-          </>
+      <div tabIndex={0} role="region" aria-label="Posting text" aria-busy={loadingText || undefined} className="-mx-1 min-h-0 flex-1 overflow-y-auto border-t border-line px-1 pt-4">
+        {text.status === "partial" && (
+          <div className="mb-3 flex flex-col items-start gap-2 rounded-card bg-warning-surface px-4 py-3 text-meta text-warning">
+            <p>This is only the start of the posting. When you start an application, you can paste the rest from the posting&apos;s page.</p>
+            <p>This checks your current rules and may use your AI provider and job source to get the full posting.</p>
+            <Button variant="secondary" size="sm" onClick={loadText} disabled={loadingText}>
+              {loadingText ? "Checking and loading…" : "Check and load full text"}
+            </Button>
+            {loadingText && <p role="status">Checking your current rules and loading the full posting…</p>}
+            {textError && <p role="alert">{textError}</p>}
+          </div>
         )}
+        <div className="text-sm leading-relaxed whitespace-pre-line">{text.text || "The source didn't send a description."}</div>
       </div>
       {/* As the source's terms ask (E14-2, E14-3). */}
       {SOURCE_INFO[posting.source].attribution && <p className="text-xs text-muted">{SOURCE_INFO[posting.source].attribution}</p>}

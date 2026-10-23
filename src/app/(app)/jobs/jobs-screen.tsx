@@ -39,6 +39,8 @@ export type JobsScreenProps = {
   query: SearchQuery;
   /** The kept search that's open (E14-10): the one in the URL, else the latest. */
   search: StoredSearch | null;
+  /** Current exclusion rules, named on the server without provider settings. */
+  filterRules?: readonly string[];
   /** The URL names a search that's no longer kept. */
   missingSearch?: boolean;
   /** The Saved or Dismissed postings, in those views. */
@@ -54,7 +56,7 @@ export type JobsScreenProps = {
 const SETTINGS_HREF = "/settings?section=jobs";
 
 /** Find jobs (E14-6, E14-7, E14-10): the search form and a kept search's postings, past searches, or the postings kept from them. */
-export function JobsScreen({ source, countries, view, query, search, missingSearch = false, kept = [], history = [], counts, today }: JobsScreenProps) {
+export function JobsScreen({ source, countries, view, query, search, filterRules = [], missingSearch = false, kept = [], history = [], counts, today }: JobsScreenProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   // A search that didn't work, with what was asked, for Try again.
@@ -99,26 +101,37 @@ export function JobsScreen({ source, countries, view, query, search, missingSear
   // Each search is kept and gets its own history entry, so Back returns to it without asking the source again.
   const run = (next: SearchQuery) =>
     startTransition(async () => {
-      const result = await runJobSearch({ query: next });
-      if (!result.ok) return void toast(result.error);
-      if (!result.data.ok) return void setFailed({ problem: result.data, query: next });
-      setFailed(null);
-      router.push(searchRunHref(result.data.id), { scroll: false });
+      try {
+        const result = await runJobSearch({ query: next });
+        if (!result.ok) return void toast(result.error);
+        if (!result.data.ok) return void setFailed({ problem: result.data, query: next });
+        setFailed(null);
+        router.push(searchRunHref(result.data.id), { scroll: false });
+      } catch {
+        setFailed({ problem: { ok: false, problem: "unavailable", message: "The search couldn't be completed. Try again." }, query: next });
+      }
     });
 
   return (
     <>
       {header}
+      {filterRules.length > 0 && (
+        <div className="mx-10 mb-4 rounded-card border border-line-card bg-card px-5 py-4 text-sm">
+          <p>Your current rules apply to Find jobs searches and the Job agent, even when its schedule is off.</p>
+          <p className="mt-1 text-meta text-muted">{filterRules.join(" · ")}</p>
+          <Link href="/settings?section=agent" className="mt-1 inline-block text-meta underline underline-offset-3">Change search rules</Link>
+        </div>
+      )}
       <SearchForm source={source} countries={countries} query={query} pending={pending} onSearch={run} />
-      {/* Announces each new set of results; the list itself is replaced. */}
+      {/* Results announce their own counts; this announces search progress and failures. */}
       <p role="status" className="sr-only">
-        {pending ? "Searching…" : failed ? failed.problem.message : search ? `${search.postings.length} postings found.` : ""}
+        {pending ? "Searching…" : failed ? failed.problem.message : ""}
       </p>
       <div className={cn("flex flex-1 flex-col motion-safe:transition-opacity", pending && "opacity-60")} aria-busy={pending || undefined}>
         {failed ? (
           <SearchProblem problem={failed.problem.problem} message={failed.problem.message} onRetry={() => run(failed.query)} />
         ) : search ? (
-          <PostingResults key={search.id} mode="search" search={search} today={today} onSearchAgain={() => run(search.query)} searching={pending} />
+          <PostingResults key={JSON.stringify([search.id, filterRules])} mode="search" search={search} today={today} onSearchAgain={() => run(search.query)} searching={pending} />
         ) : (
           <p className="px-10 pb-16 text-sm text-muted">
             {missingSearch
@@ -173,6 +186,7 @@ function SearchForm({
     <form
       role="search"
       aria-label="Search postings"
+      aria-busy={pending || undefined}
       noValidate
       onSubmit={submit}
       className="mx-10 mb-7 grid grid-cols-1 items-start gap-x-4 gap-y-4 rounded-panel border border-line-card bg-card p-6 sm:grid-cols-2 lg:grid-cols-[2fr_1.5fr_1.3fr_1fr_1fr]"

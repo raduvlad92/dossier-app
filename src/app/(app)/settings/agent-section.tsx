@@ -132,7 +132,7 @@ export function AgentSection({ initial, source, aiReady, countries, timeZone, up
           ? settings.intervalHours === 24
             ? `On. It runs daily after ${clock(settings.hour)} your time (${timeZone}). You can also run it on the Agent screen.`
             : `On. It checks your saved searches every ${settings.intervalHours} hours. You can also run it on the Agent screen.`
-          : "Off. Nothing is searched or scored until it's on."} checked={settings.enabled} onCheckedChange={turnOn} />
+          : "Off. Scheduled searches and scoring are paused. Your search rules still apply to Find jobs."} checked={settings.enabled} onCheckedChange={turnOn} />
       </Card>
 
       <Card padding="none" className="flex flex-col gap-5 px-5 py-[26px] sm:px-7">
@@ -168,9 +168,9 @@ export function AgentSection({ initial, source, aiReady, countries, timeZone, up
       <Card padding="none" className="flex flex-col gap-5 px-5 py-[26px] sm:px-7">
         <div className="flex flex-col gap-1">
           <h3 className="text-field font-medium">Exclusions</h3>
-          <p className="text-meta text-muted">These rules apply before a posting reaches your queue or gets a draft.</p>
+          <p className="text-meta text-muted">These rules apply to manual Find jobs searches and scheduled Job agent searches, even when the agent is off. Scoring and starting an application also check the current rules. Saved and dismissed postings remain in your history.</p>
         </div>
-        <Toggle label="Only postings written in English" description="Skip non-English ads. With strict language rules, unclear or truncated descriptions are also skipped." checked={settings.exclusions.englishOnly} onCheckedChange={(englishOnly) => change({ exclusions: currentExclusions({ englishOnly }) })} />
+        <Toggle label="Only postings written in English" description="Exclude non-English ads. Unclear or incomplete descriptions stay unchecked until they can be verified against your language rules." checked={settings.exclusions.englishOnly} onCheckedChange={(englishOnly) => change({ exclusions: currentExclusions({ englishOnly }) })} />
         <Input label="Allowed required languages" hint="Separate languages with commas. A requirement outside this list excludes the job; a language that is only optional is fine. Leave empty to allow any required language." value={exclusionDraft.allowedLanguages} onChange={(event) => setExclusionDraft((current) => ({ ...current, allowedLanguages: event.target.value }))} onBlur={flushExclusions} />
         <Toggle label="Exclude consultancy groups" description="Skip consultancy, professional services and outsourcing employers, including groups beyond your named exclusions." checked={settings.exclusions.excludeConsultancies} onCheckedChange={(excludeConsultancies) => change({ exclusions: currentExclusions({ excludeConsultancies }) })} />
         <Textarea label="Excluded companies" hint="One company per line, or separate names with commas. Named companies are always excluded, even if the consultancy filter is off." rows={6} value={exclusionDraft.companies} onChange={(event) => setExclusionDraft((current) => ({ ...current, companies: event.target.value }))} onBlur={flushExclusions} />

@@ -85,7 +85,7 @@ const posting: FoundPosting = {
   postedAt: "2026-10-19T00:00:00.000Z",
   url: "https://jobs.example/ledgerly-1",
   via: "LinkedIn",
-  description: "Ledgerly is hiring a Senior Product Designer for Payments.",
+  description: "Ledgerly is hiring a Senior Product Designer for Payments. We build our own payment software for customers and maintain an internal product team. You will work with researchers and engineers to improve the checkout experience. We are looking for strong prototyping skills in Figma and experience designing accessible digital products.",
   complete: true,
 };
 const context = (abort?: AbortController): JobContext => ({ id: "draft-job", step: async () => {}, signal: (abort ?? new AbortController()).signal });
@@ -146,9 +146,9 @@ describe("preparing a draft (E16-5)", () => {
 
   it("fetches the whole posting for a snippet, and refuses one with no text", async () => {
     const { id } = await candidate({ ...posting, complete: false, description: "A snippet…" });
-    source.text = "The whole posting, fetched.";
+    source.text = posting.description;
     await draftCandidate(id, context());
-    expect(await prisma().agentCandidate.findUniqueOrThrow({ where: { id } })).toMatchObject({ description: "The whole posting, fetched.", complete: true });
+    expect(await prisma().agentCandidate.findUniqueOrThrow({ where: { id } })).toMatchObject({ description: posting.description, complete: true });
 
     const empty = await candidate({ ...posting, externalId: "empty", url: "https://jobs.example/empty", complete: false, description: " " });
     source.text = null;

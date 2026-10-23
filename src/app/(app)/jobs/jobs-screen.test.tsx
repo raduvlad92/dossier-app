@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import { EMPTY_QUERY, type PostingState, type ShownPosting, type StoredSearch } 
 import {
   dismissFoundPosting,
   loadFullText,
+  recheckJobSearch,
   removeJobSearch,
   restorePosting,
   runJobSearch,
@@ -28,6 +29,7 @@ vi.mock("./actions", () => ({
   runJobSearch: vi.fn(),
   removeJobSearch: vi.fn(),
   showMorePostings: vi.fn(),
+  recheckJobSearch: vi.fn(),
   loadFullText: vi.fn(),
   savePostingForLater: vi.fn(),
   unsavePosting: vi.fn(),
@@ -60,6 +62,10 @@ const posting = (id: string, extra: Partial<ShownPosting> = {}): ShownPosting =>
 });
 
 const stored = (postings: ShownPosting[], next: string | null = null): StoredSearch => ({ id: "run-1", source: "JSEARCH", query, ranAt: "today at 14:32", postings, next });
+const recheckSuccess: Awaited<ReturnType<typeof recheckJobSearch>> = {
+  ok: true,
+  data: { ok: true, postings: [], next: null, filtering: { active: true, total: 0, eligible: 0, excluded: 0, unchecked: 0, reasons: [] } },
+};
 
 const screenProps: ComponentProps<typeof JobsScreen> = {
   source: "JSEARCH",
@@ -83,6 +89,7 @@ beforeEach(() => {
   vi.mocked(unsavePosting).mockResolvedValue({ ok: true, data: null });
   vi.mocked(dismissFoundPosting).mockResolvedValue({ ok: true, data: { wasSaved: false } });
   vi.mocked(restorePosting).mockResolvedValue({ ok: true, data: null });
+  vi.mocked(recheckJobSearch).mockResolvedValue(recheckSuccess);
 });
 
 describe("the search form", () => {
@@ -167,6 +174,187 @@ describe("the search form", () => {
     rerender(<JobsScreen {...screenProps} query={{ ...query, keywords: "nurse" }} />);
     expect(screen.getByLabelText("What")).toHaveValue("nurse");
   });
+
+  it("shows the current manual and scheduled search rules independently of the schedule", () => {
+    renderScreen({ filterRules: ["English-only postings", "Required languages limited to English or Italian", "No consultancy groups"] });
+    expect(screen.getByText(/Your current rules apply to Find jobs searches and the Job agent/)).toHaveTextContent("even when its schedule is off");
+    expect(screen.getByText(/English-only postings · Required languages limited to English or Italian · No consultancy groups/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Change search rules" })).toHaveAttribute("href", "/settings?section=agent");
+  });
+
+  it("announces a pending search and safely handles a lost action response", async () => {
+    let reject!: (error: Error) => void;
+    vi.mocked(runJobSearch).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    renderScreen();
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(screen.getByRole("search")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Searching…" })).toHaveAttribute("aria-disabled", "true");
+    await act(async () => reject(new Error("private network detail")));
+    expect(screen.getByRole("alert")).toHaveTextContent("The search couldn't be completed. Try again.");
+    expect(screen.queryByText("private network detail")).not.toBeInTheDocument();
+  });
+});
+
+describe("current-rule filtering", () => {
+  const filtered = (overrides: Partial<NonNullable<StoredSearch["filtering"]>> = {}): NonNullable<StoredSearch["filtering"]> => ({
+    active: true, total: 5, eligible: 0, excluded: 3, unchecked: 2, reasons: [], ...overrides,
+  });
+  const filteredSearch = (overrides: Partial<StoredSearch> = {}): StoredSearch => ({ ...stored([], "cursor:2"), filtering: filtered(), ...overrides });
+
+  it("keeps Show more when every source result was excluded, and replaces cumulative counts", async () => {
+    vi.mocked(showMorePostings).mockResolvedValueOnce({ ok: true, data: { ok: true, postings: [], next: "cursor:3", filtering: filtered({ total: 8, excluded: 8, unchecked: 0 }) } });
+    renderScreen({ search: filteredSearch({ filtering: filtered({ excluded: 5, unchecked: 0 }) }) });
+    expect(screen.getByText(/No results match your current rules/)).toBeInTheDocument();
+    expect(screen.queryByText(/^No postings for/)).not.toBeInTheDocument();
+    expect(screen.getByText("0 eligible postings of 5 source results from JSearch, more to come · searched today at 14:32")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Recheck saved results" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+    expect(screen.getByText("0 eligible · 8 excluded · 0 unchecked · 8 source results")).toBeInTheDocument();
+    expect(screen.queryByText(/13 source results/)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes unchecked descriptions from excluded results without checking on mount", () => {
+    renderScreen({ search: filteredSearch({ filtering: filtered({ reasons: [{ reason: "The description is not in English.", count: 3 }] }) }) });
+    expect(screen.getByText("0 eligible · 3 excluded · 2 unchecked · 5 source results")).toBeInTheDocument();
+    expect(screen.getByText(/Unchecked results stay hidden until they are verified/)).toBeInTheDocument();
+    expect(screen.getByText(/This does not run a new search of job sources/)).toHaveTextContent("your AI provider");
+    expect(screen.getByText("The description is not in English. (3)")).toBeInTheDocument();
+    expect(recheckJobSearch).not.toHaveBeenCalled();
+    expect(runJobSearch).not.toHaveBeenCalled();
+    expect(showMorePostings).not.toHaveBeenCalled();
+  });
+
+  it("uses source totals separately from the displayed eligible list", () => {
+    renderScreen({ search: filteredSearch({ postings: [posting("a")], next: null, filtering: filtered({ eligible: 1, excluded: 2 }) }) });
+    expect(screen.getByText("1 eligible posting of 5 source results from JSearch · searched today at 14:32")).toBeInTheDocument();
+    expect(screen.getByText("1 eligible · 2 excluded · 2 unchecked · 5 source results")).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Postings" })).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("keeps the genuine no-source-results message for an empty source response", () => {
+    renderScreen({ search: filteredSearch({ next: null, filtering: filtered({ total: 0, excluded: 0, unchecked: 0 }) }) });
+    expect(screen.getByText(/^No postings for/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Recheck saved results" })).not.toBeInTheDocument();
+  });
+
+  it("explicitly rechecks once, announces pending work and refreshes only after success", async () => {
+    let finish!: (result: Awaited<ReturnType<typeof recheckJobSearch>>) => void;
+    vi.mocked(recheckJobSearch).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderScreen({ search: filteredSearch() });
+    await userEvent.click(screen.getByRole("button", { name: "Recheck saved results" }));
+    const pending = screen.getByRole("button", { name: "Rechecking saved results…" });
+    expect(pending).toBeDisabled();
+    expect(pending.closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getAllByRole("status").some((status) => status.textContent === "Rechecking saved results…")).toBe(true);
+    expect(screen.getByRole("button", { name: "Show more" })).toBeDisabled();
+    await userEvent.click(pending);
+    expect(recheckJobSearch).toHaveBeenCalledTimes(1);
+    expect(recheckJobSearch).toHaveBeenCalledWith({ searchId: "run-1" });
+    expect(router.refresh).not.toHaveBeenCalled();
+    await act(async () => finish(recheckSuccess));
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+    expect(runJobSearch).not.toHaveBeenCalled();
+    expect(showMorePostings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ok: false as const, error: "Choose an AI provider first." },
+    { ok: true as const, data: { ok: false as const, problem: "unavailable" as const, message: "The saved results could not be checked." } },
+  ])("shows a recheck failure and keeps retry available: $ok", async (result) => {
+    vi.mocked(recheckJobSearch).mockResolvedValueOnce(result);
+    renderScreen({ search: filteredSearch() });
+    await userEvent.click(screen.getByRole("button", { name: "Recheck saved results" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(result.ok ? result.data.message : result.error);
+    expect(screen.getByRole("button", { name: "Recheck saved results" })).toBeEnabled();
+    expect(router.refresh).not.toHaveBeenCalled();
+  });
+
+  it("recovers safely when recheck rejects without exposing error details", async () => {
+    vi.mocked(recheckJobSearch).mockRejectedValueOnce(new Error("private provider detail"));
+    renderScreen({ search: filteredSearch() });
+    await userEvent.click(screen.getByRole("button", { name: "Recheck saved results" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Saved results couldn't be rechecked. Try again.");
+    expect(screen.queryByText("private provider detail")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Recheck saved results" }));
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("immediately replaces stale rows, detail and cursor when the same search refreshes", () => {
+    const { rerender } = renderScreen({ search: stored([posting("german")], "cursor:2") });
+    expect(screen.getByRole("heading", { name: "Designer german" })).toBeInTheDocument();
+    rerender(<JobsScreen {...screenProps} search={filteredSearch({ next: null })} />);
+    expect(screen.queryByRole("list", { name: "Postings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Designer german" })).not.toBeInTheDocument();
+    expect(screen.queryByText("The whole posting german.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    expect(screen.getByText("0 eligible · 3 excluded · 2 unchecked · 5 source results")).toBeInTheDocument();
+  });
+
+  it("does not restore old rows when an old page request finishes after refreshed props", async () => {
+    let finish!: (result: Awaited<ReturnType<typeof showMorePostings>>) => void;
+    vi.mocked(showMorePostings).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { rerender } = renderScreen({ search: stored([posting("german")], "cursor:2") });
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByRole("button", { name: "Loading more…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Loading more…" }).closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+    rerender(<JobsScreen {...screenProps} search={filteredSearch({ next: null })} />);
+    await act(async () => finish({ ok: true, data: { ok: true, postings: [posting("old-page")], next: null } }));
+    expect(screen.queryByRole("list", { name: "Postings" })).not.toBeInTheDocument();
+    expect(screen.queryByText("The whole posting old-page.")).not.toBeInTheDocument();
+  });
+
+  it("removes a previously shown German posting when Show more returns only current English results", async () => {
+    vi.mocked(showMorePostings).mockResolvedValueOnce({ ok: true, data: {
+      ok: true,
+      postings: [posting("english")],
+      next: "cursor:3",
+      filtering: filtered({ total: 2, eligible: 1, excluded: 1, unchecked: 0 }),
+    } });
+    renderScreen({ search: stored([posting("german")], "cursor:2") });
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.queryByRole("button", { name: /^Designer german/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Designer german" })).not.toBeInTheDocument();
+    expect(screen.queryByText("The whole posting german.")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Designer english" })).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Postings" })).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("1 eligible · 1 excluded · 0 unchecked · 2 source results")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show more" })).toBeEnabled();
+  });
+
+  it("updates a retained posting's detail from the complete Show more snapshot", async () => {
+    vi.mocked(showMorePostings).mockResolvedValueOnce({ ok: true, data: { ok: true, postings: [posting("a", { description: "New verified description." })], next: null } });
+    renderScreen({ search: stored([posting("a")], "cursor:2") });
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByText("New verified description.")).toBeInTheDocument();
+    expect(screen.queryByText("The whole posting a.")).not.toBeInTheDocument();
+  });
+
+  it("updates a retained posting's description on same-search refresh and Back", () => {
+    const initial = stored([posting("a")]);
+    const { rerender } = renderScreen({ search: initial });
+    rerender(<JobsScreen {...screenProps} search={stored([posting("a", { description: "New verified description." })])} />);
+    expect(screen.getByText("New verified description.")).toBeInTheDocument();
+    expect(screen.queryByText("The whole posting a.")).not.toBeInTheDocument();
+    rerender(<JobsScreen {...screenProps} search={initial} />);
+    expect(screen.getByText("The whole posting a.")).toBeInTheDocument();
+  });
+
+  it("safely recovers from a pagination network error", async () => {
+    vi.mocked(showMorePostings).mockRejectedValueOnce(new Error("private source detail"));
+    renderScreen({ search: filteredSearch() });
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("More results couldn't be loaded. Try again.");
+    expect(screen.getByRole("button", { name: "Show more" })).toBeEnabled();
+    expect(screen.queryByText("private source detail")).not.toBeInTheDocument();
+  });
+
+  it.each(["saved", "dismissed"] as const)("keeps %s postings as history and explains current action rules", (view) => {
+    renderScreen({ view, kept: [posting("historical", { state: { ...state, saved: view === "saved", dismissed: view === "dismissed" } })] });
+    expect(screen.getByRole("heading", { name: "Designer historical" })).toBeInTheDocument();
+    expect(screen.getByText(/Saved and dismissed postings remain here for your history/)).toHaveTextContent("Scoring and starting an application check your current rules.");
+    expect(screen.getByRole("link", { name: "current rules" })).toHaveAttribute("href", "/settings?section=agent");
+  });
 });
 
 describe("the results", () => {
@@ -241,8 +429,8 @@ describe("the results", () => {
     expect(screen.getByRole("button", { name: /^Designer a/ })).toBeInTheDocument();
   });
 
-  it("loads the next page into the kept search, once each", async () => {
-    vi.mocked(showMorePostings).mockResolvedValue({ ok: true, data: { ok: true, postings: [posting("b"), posting("c")], next: null } });
+  it("replaces the kept search with its complete current list, once each", async () => {
+    vi.mocked(showMorePostings).mockResolvedValue({ ok: true, data: { ok: true, postings: [posting("a"), posting("b"), posting("c")], next: null } });
     renderScreen({ search: stored([posting("a"), posting("b")], "cursor:2") });
     await userEvent.click(screen.getByRole("button", { name: "Show more" }));
     expect(showMorePostings).toHaveBeenCalledWith({ searchId: "run-1" });
@@ -264,18 +452,111 @@ describe("the results", () => {
     expect(toast).toHaveBeenCalledWith("No searches left.");
   });
 
-  it("gets the whole text when the source only sent the start", async () => {
-    vi.mocked(loadFullText).mockResolvedValue({ ok: true, data: { text: "Everything about the role." } });
-    renderScreen({ search: stored([posting("a", { complete: false, description: "The start…" })]) });
-    expect(screen.getByText("Getting the whole posting…")).toBeInTheDocument();
-    expect(await screen.findByText("Everything about the role.")).toBeInTheDocument();
+  it("explicitly checks and loads full text once, keeping the snippet visible while pending", async () => {
+    let finish!: (result: Awaited<ReturnType<typeof loadFullText>>) => void;
+    vi.mocked(loadFullText).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const partial = posting("a", { complete: false, description: "The start…" });
+    renderScreen({ search: stored([partial]) });
+    expect(screen.getByText("The start…")).toBeInTheDocument();
+    expect(screen.getByText(/This checks your current rules and may use your AI provider and job source/)).toBeInTheDocument();
+    expect(loadFullText).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    const pending = screen.getByRole("button", { name: "Checking and loading…" });
+    expect(pending).toBeDisabled();
+    expect(screen.getByRole("region", { name: "Posting text" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("Checking your current rules and loading the full posting…")).toHaveAttribute("role", "status");
+    expect(screen.getByText("The start…")).toBeInTheDocument();
+    await userEvent.click(pending);
+    expect(loadFullText).toHaveBeenCalledTimes(1);
+    const { state: _ignored, ...sent } = partial;
+    void _ignored;
+    expect(loadFullText).toHaveBeenCalledWith({ posting: sent });
+    await act(async () => finish({ ok: true, data: { text: "Everything about the role." } }));
+    expect(screen.getByText("Everything about the role.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check and load full text" })).not.toBeInTheDocument();
   });
 
-  it("shows the start, and says so, when the rest can't be had", async () => {
-    vi.mocked(loadFullText).mockResolvedValue({ ok: true, data: { text: null } });
+  it.each(["search", "saved", "dismissed"] as const)("never automatically loads incomplete %s postings on mount, selection, refresh or reload", async (view) => {
+    vi.mocked(loadFullText).mockResolvedValue({ ok: true, data: { text: "A provider response." } });
+    const partials = ["a", "b"].map((id) => posting(id, {
+      complete: false,
+      description: `The start of ${id}…`,
+      state: { ...state, saved: view === "saved", dismissed: view === "dismissed" },
+    }));
+    const props = { view, search: view === "search" ? stored(partials) : null, kept: partials };
+    const { rerender, unmount } = renderScreen(props);
+    await act(async () => {});
+    expect(loadFullText).not.toHaveBeenCalled();
+    expect(screen.getByText("The start of a…")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Designer b/ }));
+    expect(screen.getByText("The start of b…")).toBeInTheDocument();
+    expect(loadFullText).not.toHaveBeenCalled();
+    const refreshed = partials.map((entry) => ({ ...entry }));
+    rerender(<JobsScreen {...screenProps} {...props} search={view === "search" ? stored(refreshed) : null} kept={refreshed} />);
+    await act(async () => {});
+    expect(screen.getByText("The start of a…")).toBeInTheDocument();
+    expect(loadFullText).not.toHaveBeenCalled();
+    unmount();
+    renderScreen(props);
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Check and load full text" })).toBeEnabled();
+    expect(loadFullText).not.toHaveBeenCalled();
+    expect(runJobSearch).not.toHaveBeenCalled();
+    expect(showMorePostings).not.toHaveBeenCalled();
+    expect(recheckJobSearch).not.toHaveBeenCalled();
+  });
+
+  it.each(["selection", "same-search refresh"])("ignores a full-text response after %s changes the detail", async (change) => {
+    let finish!: (result: Awaited<ReturnType<typeof loadFullText>>) => void;
+    vi.mocked(loadFullText).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { rerender } = renderScreen({ search: stored([posting("a", { complete: false, description: "The start…" }), posting("b")]) });
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    if (change === "selection") await userEvent.click(screen.getByRole("button", { name: /^Designer b/ }));
+    else rerender(<JobsScreen {...screenProps} search={stored([posting("a", { description: "New verified description." })])} />);
+    await act(async () => finish({ ok: true, data: { text: "Old provider response." } }));
+    expect(screen.queryByText("Old provider response.")).not.toBeInTheDocument();
+    expect(screen.queryByText("The start…")).not.toBeInTheDocument();
+    expect(screen.getByText(change === "selection" ? "The whole posting b." : "New verified description.")).toBeInTheDocument();
+    expect(loadFullText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, ""])("keeps the start and offers retry when the rest can't be had: %s", async (text) => {
+    vi.mocked(loadFullText).mockResolvedValueOnce({ ok: true, data: { text } });
     renderScreen({ search: stored([posting("a", { complete: false, description: "The start…" })]) });
-    expect(await screen.findByText(/This is only the start of the posting/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("The full text isn't available right now. Try again or open the posting's page.");
+    expect(screen.getByText(/This is only the start of the posting/)).toBeInTheDocument();
     expect(screen.getByText("The start…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check and load full text" })).toBeEnabled();
+  });
+
+  it("keeps the snippet after a rules failure and loads successfully on explicit retry", async () => {
+    vi.mocked(loadFullText)
+      .mockResolvedValueOnce({ ok: false, error: "Choose an AI provider to check your current rules." })
+      .mockResolvedValueOnce({ ok: true, data: { text: "Everything about the role." } });
+    renderScreen({ search: stored([posting("a", { complete: false, description: "The start…" })]) });
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose an AI provider to check your current rules.");
+    expect(screen.getByText("The start…")).toBeInTheDocument();
+    expect(loadFullText).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    expect(screen.getByText("Everything about the role.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(loadFullText).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers from a rejected full-text request without exposing private details", async () => {
+    vi.mocked(loadFullText)
+      .mockRejectedValueOnce(new Error("private provider detail"))
+      .mockResolvedValueOnce({ ok: true, data: { text: "Everything about the role." } });
+    renderScreen({ search: stored([posting("a", { complete: false, description: "The start…" })]) });
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("The full text couldn't be loaded. Try again.");
+    expect(screen.queryByText("private provider detail")).not.toBeInTheDocument();
+    expect(screen.getByText("The start…")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Check and load full text" }));
+    expect(screen.getByText("Everything about the role.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("starts an application from the selected posting (E14-8)", async () => {

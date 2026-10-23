@@ -6,6 +6,7 @@ import { getAiProvider } from "@/lib/ai";
 import { loadTaskOptions } from "@/lib/ai/task-options";
 import { scorePosting } from "@/lib/ai/tasks";
 import { fullText } from "@/lib/job-search/find";
+import { requireEligiblePosting } from "@/lib/job-search/eligibility";
 import { foundPostingSchema, postingKey, postingText, type FoundPosting } from "@/lib/job-search/search";
 import { saveScore } from "@/lib/posting-scores";
 import { loadProfile } from "@/lib/profile-data";
@@ -25,19 +26,23 @@ export const scorePostingJob = defineJob({
   input: z.object({ posting: foundPostingSchema }),
   result: z.object({ score: z.number().int(), reasons: z.array(z.string()), redFlags: z.array(z.string()) }),
   async run({ posting }, { step, signal }) {
-    let description = posting.description;
-    if (!posting.complete) {
+    await step("Checking your posting rules");
+    let eligible = await requireEligiblePosting(posting, signal);
+    if (!eligible.complete) {
       await step("Getting the whole posting");
-      description = (await fullText(posting)) ?? posting.description;
+      const description = await fullText(eligible);
+      if (description) eligible = { ...eligible, description, complete: true };
     }
     await step("Scoring it against your profile");
     const [provider, options, profile] = await Promise.all([getAiProvider(), loadTaskOptions(), loadProfile()]);
     const { data, promptVersion } = await scorePosting(
       provider,
-      { posting: postingText({ ...posting, description }), title: posting.title, company: posting.company, place: posting.place, remote: posting.remote, salary: posting.salary, profile },
+      { posting: postingText(eligible), title: eligible.title, company: eligible.company, place: eligible.place, remote: eligible.remote, salary: eligible.salary, profile },
       { ...options, signal },
     );
-    await saveScore(posting, data, promptVersion);
+    // A queued or running job must not publish a score after its policy changes.
+    await requireEligiblePosting(eligible, signal);
+    await saveScore(eligible, data, promptVersion);
     return data;
   },
 });

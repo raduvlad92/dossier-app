@@ -174,6 +174,9 @@ test("axe: open menus and dialogs", async ({ page }) => {
 });
 
 test("axe: Find jobs with results, and its past searches (E14)", async ({ page }) => {
+  // Keep this populated-state accessibility check independent of exclusions.
+  await sql(`INSERT INTO "Setting" (key, value, "updatedAt") VALUES ('agentExclusions', $1, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [JSON.stringify({ englishOnly: false, allowedLanguages: [], excludeConsultancies: false, companies: [] })]);
   await page.goto("/jobs");
   await page.getByRole("search", { name: "Search postings" }).getByRole("button", { name: "Search" }).click();
   await expect(page.getByRole("list", { name: "Postings" })).toBeVisible();
@@ -183,6 +186,7 @@ test("axe: Find jobs with results, and its past searches (E14)", async ({ page }
   await page.goto("/jobs?view=history");
   await expect(page.getByRole("region", { name: "Today" })).toBeVisible();
   await expectAccessible(page);
+  await sql(`DELETE FROM "Setting" WHERE key = 'agentExclusions'`);
 });
 
 test("axe: the theme builder and the review step of a new application", async ({ page }) => {

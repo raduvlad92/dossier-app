@@ -5,6 +5,7 @@ import { classifyAgentPosting, MAX_AGENT_CLASSIFICATION_CHARACTERS } from "@/lib
 import type { FoundPosting } from "@/lib/job-search/search";
 
 import { agentExclusionsSchema, type AgentExclusions } from "./exclusion-settings";
+import { checkEnglishPostingLanguage } from "./posting-language";
 
 export { agentExclusionsSchema, DEFAULT_EXCLUDED_COMPANIES, type AgentExclusions } from "./exclusion-settings";
 
@@ -73,6 +74,10 @@ export async function filterAgentPosting(posting: FoundPosting, exclusions: Agen
   const description = posting.description.trim();
   if (!posting.complete || !description) return reject("The complete job description is needed to check your exclusions.");
   if (description.length > MAX_AGENT_CLASSIFICATION_CHARACTERS) return reject("The job description is too long to check in full; it needs a manual review.");
+  if (rules.englishOnly) {
+    const language = checkEnglishPostingLanguage(description);
+    if (!language.allowed) return reject(language.reason, language.cacheable);
+  }
 
   try {
     const assessment = await classifyAgentPosting(await getAiProvider(), posting, signal);

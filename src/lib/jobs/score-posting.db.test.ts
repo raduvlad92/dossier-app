@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FoundPosting } from "@/lib/job-search/search";
 import { postingStates } from "@/lib/postings";
+import { saveSettings } from "@/lib/settings-data";
 import { createTestClient, resetDatabase } from "@/test/db";
 
 import { MockProvider } from "../ai/providers/mock";
@@ -14,6 +15,7 @@ vi.mock("@/lib/prisma", async () => {
   db.client = createTestClient();
   return { prisma: db.client };
 });
+vi.mock("@/lib/env", () => ({ env: { DOSSIER_SECRET: "a".repeat(32) } }));
 vi.mock("@/lib/profile-data", async () => {
   const { demoProfile } = await import("@/lib/demo-profile");
   return { loadProfile: async () => demoProfile() };
@@ -53,6 +55,7 @@ const context = () => {
 
 beforeEach(async () => {
   await resetDatabase(prisma());
+  await saveSettings({ agentExclusions: { englishOnly: false, allowedLanguages: [], excludeConsultancies: false, companies: [] } });
   Object.assign(fake, { fullText: null, sent: [] });
 });
 afterAll(() => prisma().$disconnect());
@@ -62,7 +65,7 @@ describe("Score in Find jobs (#208)", () => {
     fake.fullText = "The whole posting: design our freight tools.";
     const run = context();
     expect(await scorePostingJob.run({ posting }, run)).toEqual({ score: 78, reasons: ["Built a design system at Northwind."], redFlags: ["Dutch is required."] });
-    expect(run.steps).toEqual(["Getting the whole posting", "Scoring it against your profile"]);
+    expect(run.steps).toEqual(["Checking your posting rules", "Getting the whole posting", "Scoring it against your profile"]);
     expect(fake.sent[0]).toContain("The whole posting: design our freight tools.");
 
     expect(await prisma().postingScore.findUniqueOrThrow({ where: { source_externalId: { source: "ADZUNA", externalId: "az-1" } } })).toMatchObject({ score: 78, scoredWith: "score-posting@1" });
@@ -79,10 +82,32 @@ describe("Score in Find jobs (#208)", () => {
     // A whole posting goes straight to scoring.
     const whole = context();
     await scorePostingJob.run({ posting: { ...posting, complete: true } }, whole);
-    expect(whole.steps).toEqual(["Scoring it against your profile"]);
+    expect(whole.steps).toEqual(["Checking your posting rules", "Scoring it against your profile"]);
   });
 
   it("keys a posting's scoring, so a second click follows the first", () => {
     expect(scoreJobKey(posting)).toBe("posting-score:ADZUNA:az-1");
+  });
+
+  it("rejects an old queued German posting before sending the profile to the scoring provider", async () => {
+    await saveSettings({ agentExclusions: { englishOnly: true, allowedLanguages: [], excludeConsultancies: false, companies: [] } });
+    const german = { ...posting, complete: true, description: "Wir entwickeln sichere Software für Unternehmen. Sie übernehmen die Leitung unserer internen IT und sorgen für einen zuverlässigen Betrieb aller Systeme. Ihre Aufgaben umfassen die Planung der Infrastruktur, die Betreuung unserer Mitarbeitenden und die Zusammenarbeit mit unseren Entwicklungsteams. Wir bieten flexible Arbeitszeiten und langfristige Entwicklungsmöglichkeiten." };
+    await expect(scorePostingJob.run({ posting: german }, context())).rejects.toThrow(/English/);
+    expect(fake.sent).toEqual([]);
+    expect(await prisma().postingScore.count()).toBe(0);
+  });
+
+  it("does not publish a score when English-only is enabled while a previously unrestricted job is running", async () => {
+    const german = { ...posting, complete: true, description: "Unser Unternehmen entwickelt sichere Software für Geschäftskunden. Sie leiten die interne IT-Abteilung und verantworten die technische Infrastruktur. Dabei arbeiten Sie eng mit unseren Entwicklungsteams zusammen, betreuen unsere Mitarbeitenden und verbessern die internen Abläufe. Wir bieten Ihnen flexible Arbeitszeiten, ein festes Gehalt und langfristige Entwicklungsmöglichkeiten." };
+    const run = context();
+    const step = async (name: string) => {
+      await run.step(name);
+      if (name === "Scoring it against your profile") {
+        await saveSettings({ agentExclusions: { englishOnly: true, allowedLanguages: [], excludeConsultancies: false, companies: [] } });
+      }
+    };
+    await expect(scorePostingJob.run({ posting: german }, { ...run, step })).rejects.toThrow(/English/);
+    expect(fake.sent).toHaveLength(1);
+    expect(await prisma().postingScore.count()).toBe(0);
   });
 });

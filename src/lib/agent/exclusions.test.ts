@@ -66,7 +66,7 @@ describe("agent employer exclusions", () => {
   });
 
   it("does not block an employer because the ad mentions an excluded supplier", async () => {
-    expect(await filterAgentPosting(posting(`${introduction} You manage our Deloitte vendor contract.`), rules)).toEqual({ allowed: true, reason: null });
+    expect(await filterAgentPosting(posting(`${introduction} You will manage contracts with external suppliers such as Deloitte and make sure they support our internal teams effectively.`), rules)).toEqual({ allowed: true, reason: null });
   });
 
   it("uses semantic employer classification for consultancies outside the company list", async () => {
@@ -84,6 +84,26 @@ describe("agent employer exclusions", () => {
 });
 
 describe("agent language exclusions", () => {
+  const germanBody = "Als Leiter IT übernehmen Sie die Verantwortung für unsere interne IT und führen ein Team von acht Mitarbeitenden. Sie entwickeln unsere IT-Strategie weiter, steuern externe Dienstleister und stellen den zuverlässigen Betrieb unserer Systeme sicher.";
+
+  it.each([germanBody, `${introduction}\n\n${germanBody}`])("rejects a German body or section despite an English title and a deliberately wrong English model answer", async (description) => {
+    const mock = answerWith(assessment({ postingLanguage: "english", postingLanguageEvidence: germanBody }));
+    expect(await filterAgentPosting(posting(description, { title: "Head of IT" }), rules)).toMatchObject({ allowed: false, cacheable: true, reason: expect.stringContaining("not entirely in English") });
+    expect(provider.load).not.toHaveBeenCalled();
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  it.each(["IT Ops", "AWS SQL IT IAM SSO SOC NOC SaaS SAP ERP", "English German English German English German German English English German English German"])("holds uncertain body language without loading a model or permanently caching it: %s", async (description) => {
+    expect(await filterAgentPosting(posting(description), rules)).toMatchObject({ allowed: false, cacheable: false });
+    expect(provider.load).not.toHaveBeenCalled();
+  });
+
+  it("only applies the independent body check when English-only is enabled", async () => {
+    answerWith(assessment({ postingLanguage: "other", postingLanguageEvidence: germanBody, consultancyEvidence: germanBody }));
+    expect((await filterAgentPosting(posting(germanBody), { ...rules, englishOnly: false })).allowed).toBe(true);
+    expect(provider.load).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["Fluent German and English are required.", ["German", "English"], "all", false],
     ["English or German is required.", ["English", "German"], "any", true],

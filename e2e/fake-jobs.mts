@@ -5,6 +5,8 @@
 
 import { createServer, type ServerResponse } from "node:http";
 
+import { MANUAL_FILTER_POSTINGS } from "./manual-filter-fixtures.mts";
+
 const port = Number(process.env.FAKE_JOBS_PORT ?? 3998);
 /** The JSearch key the app is given in e2e/support.ts. */
 const JSEARCH_KEY = "e2e-jsearch-key";
@@ -31,6 +33,13 @@ const firstPage = [
 ];
 const secondPage = [job("e2e-canal", "Design Systems Designer", "Canal Software")];
 
+const manualFilterJobs = MANUAL_FILTER_POSTINGS.map((posting) => job(posting.externalId, posting.title, posting.company, {
+  job_description: posting.description,
+  job_location: posting.place,
+  job_country: "DE",
+  job_posted_at_datetime_utc: posting.postedAt,
+}));
+
 // Recurring-watch fixtures: only one distinct job passes the language/employer rules.
 const watchDescription = "Harbor Products builds its own software products.\n\nWe are hiring a Head of IT to lead our internal IT operations and technology team.\nRequirements: IT leadership experience. English is required. Italian is preferred. German is optional.\nResponsibilities: manage internal systems, security, vendors and support.";
 const watchFirstPage = [
@@ -51,6 +60,8 @@ function send(response: ServerResponse, status: number, body: unknown) {
 
 /** How many JSearch searches were asked for, so a spec can tell a kept search came from the database. */
 let searches = 0;
+/** Every source request, including details, so passive reads cannot hide extra work. */
+const sourceRequests: { path: string; query: string | null; cursor: string | null }[] = [];
 /** The usage pings the app sent here (DOSSIER_USAGE_PING_TEST_URL), so a spec can tell whether one went (#172). */
 const pings: unknown[] = [];
 
@@ -58,6 +69,7 @@ createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://localhost:${port}`);
   if (url.pathname === "/health") return send(response, 200, { ok: true });
   if (url.pathname === "/searches") return send(response, 200, { searches });
+  if (url.pathname === "/requests") return send(response, 200, { requests: sourceRequests });
   if (url.pathname === "/pings") return send(response, 200, { pings });
   if (url.pathname === "/ping" && request.method === "POST") {
     let body = "";
@@ -72,9 +84,25 @@ createServer((request, response) => {
   // what a test stores as the latest release stays as it is.
   if (url.pathname === "/github/repos/AienTech/dossier/releases/latest") return send(response, 404, { message: "Not Found" });
 
+  if (/^\/(jsearch|adzuna|arbeitsagentur)\//.test(url.pathname)) {
+    sourceRequests.push({ path: url.pathname, query: url.searchParams.get("query"), cursor: url.searchParams.get("cursor") });
+  }
+
   if (url.pathname === "/jsearch/search-v2") {
     if (request.headers["x-api-key"] !== JSEARCH_KEY) return send(response, 401, { status: "ERROR", error: { message: "Invalid API key" } });
     searches += 1;
+    if (/manual-filter-pages-e2e/i.test(url.searchParams.get("query") ?? "")) {
+      const cursor = url.searchParams.get("cursor");
+      const jobs = cursor === "MANUAL-FILTER-PAGE-3" ? [manualFilterJobs[0]]
+        : cursor === "MANUAL-FILTER-PAGE-2" ? [manualFilterJobs[2], manualFilterJobs[4]]
+          : [manualFilterJobs[1], manualFilterJobs[3]];
+      const next = cursor === "MANUAL-FILTER-PAGE-3" ? null
+        : cursor === "MANUAL-FILTER-PAGE-2" ? "MANUAL-FILTER-PAGE-3" : "MANUAL-FILTER-PAGE-2";
+      return send(response, 200, { status: "OK", data: { jobs, cursor: next } });
+    }
+    if (/manual-filter-mixed-e2e/i.test(url.searchParams.get("query") ?? "")) {
+      return send(response, 200, { status: "OK", data: { jobs: manualFilterJobs, cursor: null } });
+    }
     if (/watch-e2e/i.test(url.searchParams.get("query") ?? "")) {
       const second = url.searchParams.get("cursor") === "WATCH-PAGE-2";
       return send(response, 200, { status: "OK", data: second ? { jobs: watchSecondPage, cursor: null } : { jobs: watchFirstPage, cursor: "WATCH-PAGE-2" } });

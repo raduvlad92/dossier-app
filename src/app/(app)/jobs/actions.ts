@@ -4,11 +4,12 @@ import { z } from "zod";
 
 import { action, ActionError } from "@/lib/action";
 import { isAiConfigured } from "@/lib/ai/config";
+import { requireEligiblePosting } from "@/lib/job-search/eligibility";
 import { fullText } from "@/lib/job-search/find";
-import { foundPostingSchema, JOB_SOURCES, searchQuerySchema } from "@/lib/job-search/search";
+import { foundPostingSchema, JOB_SOURCES, searchQuerySchema, type SearchOutcome } from "@/lib/job-search/search";
 import { findUnfinishedJobs, startJob } from "@/lib/jobs/runner";
 import { scoreJobKey, scorePostingJob } from "@/lib/jobs/score-posting";
-import { removeSearch, runSearch, showMoreFor } from "@/lib/posting-searches";
+import { loadSearch, recheckSearch, removeSearch, runSearch, showMoreFor } from "@/lib/posting-searches";
 import { dismissPosting, savePosting, storePosting, unmarkPosting } from "@/lib/postings";
 
 // Find jobs (E14-6). Each search is kept with what it found (E14-10).
@@ -21,8 +22,17 @@ const searchId = z.string().min(1).max(100);
 /** "Search": asks the chosen source and keeps the search with what it found; gives its id, or what went wrong. */
 export const runJobSearch = action(z.object({ query: searchQuerySchema }), ({ query }) => runSearch(query));
 
-/** "Show more": the next page, added to the kept search. */
-export const showMorePostings = action(z.object({ searchId }), ({ searchId }) => showMoreFor(searchId));
+/** "Show more": add the next page, then return the whole search under current rules. */
+export const showMorePostings = action(z.object({ searchId }), async ({ searchId }): Promise<SearchOutcome> => {
+  const added = await showMoreFor(searchId);
+  if (!added.ok) return added;
+  const current = await loadSearch(searchId);
+  if (!current) return { ok: false, problem: "changed", message: "That search is no longer kept. Search again." };
+  return { ok: true, postings: current.postings, next: current.next, filtering: current.filtering };
+});
+
+/** Rechecks a stored page against current rules without starting another search. */
+export const recheckJobSearch = action(z.object({ searchId }), ({ searchId }) => recheckSearch(searchId));
 
 /** Removes a kept search and what it found; saved postings stay. */
 export const removeJobSearch = action(z.object({ id: searchId }), async ({ id }, { toast }) => {
@@ -32,10 +42,10 @@ export const removeJobSearch = action(z.object({ id: searchId }), async ({ id },
 });
 
 /** The whole text of a posting the search only gave the start of; null when it can't be had. */
-export const loadFullText = action(z.object({ posting: foundPostingSchema }), async ({ posting }) => ({ text: await fullText(posting) }));
+export const loadFullText = action(z.object({ posting: foundPostingSchema }), async ({ posting }) => ({ text: await fullText(await requireEligiblePosting(posting)) }));
 
 export const savePostingForLater = action(z.object({ posting: foundPostingSchema }), async ({ posting }, { toast }) => {
-  const saved = await savePosting(posting);
+  const saved = await savePosting(await requireEligiblePosting(posting));
   toast("Saved for later.");
   return { postingId: saved.id };
 });
@@ -54,8 +64,9 @@ export const dismissFoundPosting = action(z.object({ posting: foundPostingSchema
  * can be had, for New application to open from its id.
  */
 export const startApplicationFrom = action(z.object({ posting: foundPostingSchema }), async ({ posting }) => {
-  const text = await fullText(posting);
-  const stored = await storePosting(text ? { ...posting, description: text, complete: true } : posting);
+  const eligible = await requireEligiblePosting(posting);
+  const text = await fullText(eligible);
+  const stored = await storePosting(text ? { ...eligible, description: text, complete: true } : eligible);
   return { postingId: stored.id };
 });
 
@@ -68,7 +79,8 @@ export const restorePosting = action(postingRef.extend({ saved: z.boolean() }), 
 /** "Score" (#208): how well a posting fits the profile, in the background; a scoring under way is followed, not started again. */
 export const startScoringPosting = action(z.object({ posting: foundPostingSchema }), async ({ posting }) => {
   if (!(await isAiConfigured())) throw new ActionError("Choose an AI provider in Settings → AI provider first.");
-  const key = scoreJobKey(posting);
+  const eligible = await requireEligiblePosting(posting);
+  const key = scoreJobKey(eligible);
   const [unfinished] = await findUnfinishedJobs(key);
-  return { jobId: unfinished?.id ?? (await startJob(scorePostingJob, { posting }, { key })) };
+  return { jobId: unfinished?.id ?? (await startJob(scorePostingJob, { posting: eligible }, { key })) };
 });

@@ -11,6 +11,7 @@ import { jsearchV2LastPage } from "@/test/job-search-fixtures";
 import {
   dismissFoundPosting,
   loadFullText,
+  recheckJobSearch,
   removeJobSearch,
   restorePosting,
   runJobSearch,
@@ -60,7 +61,10 @@ beforeEach(async () => {
   ai.ready = true;
   await resetDatabase(prisma());
   clearJobSearchCache();
-  await saveSettings({ jobSource: "JSEARCH", jsearchKeyEnc: encryptSecret(JOB_SOURCE_KEY, "ak_test") });
+  await saveSettings({
+    jobSource: "JSEARCH", jsearchKeyEnc: encryptSecret(JOB_SOURCE_KEY, "ak_test"),
+    agentExclusions: { englishOnly: false, allowedLanguages: [], excludeConsultancies: false, companies: [] },
+  });
 });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(() => prisma().$disconnect());
@@ -73,7 +77,12 @@ describe("Find jobs actions", () => {
     const id = run.ok && run.data.ok ? run.data.id : "";
 
     stubFetch(() => json(jsearchV2LastPage));
-    expect(await showMorePostings({ searchId: id })).toEqual({ ok: true, data: { ok: true, postings: [], next: null } });
+    expect(await showMorePostings({ searchId: id })).toEqual({ ok: true, data: { ok: true, postings: [expect.objectContaining({
+      source: "JSEARCH", externalId: jsearchV2LastPage.data.jobs[0].job_id, title: "UX Researcher",
+      state: { postingId: null, saved: false, dismissed: false, applicationId: null, score: null },
+    })], next: null,
+      filtering: { active: false, total: 1, eligible: 1, excluded: 0, unchecked: 0, reasons: [] },
+    } });
 
     expect(await removeJobSearch({ id })).toEqual({ ok: true, data: null, toast: "Search removed. Saved postings from it stay in Saved." });
     expect(await prisma().postingSearch.count()).toBe(0);
@@ -134,5 +143,30 @@ describe("Score (#208)", () => {
   it("says when there's no AI provider to score with", async () => {
     ai.ready = false;
     expect(await startScoringPosting({ posting })).toEqual({ ok: false, error: "Choose an AI provider in Settings → AI provider first." });
+  });
+});
+
+describe("current posting rules at the action boundary", () => {
+  it("blocks a German posting in stale or forged client state before reading, saving, scoring or applying", async () => {
+    await saveSettings({ agentExclusions: { englishOnly: true, allowedLanguages: [], excludeConsultancies: false, companies: [] } });
+    const { startJob } = await import("@/lib/jobs/runner");
+    vi.mocked(startJob).mockClear();
+    const stale = {
+      ...posting,
+      title: "Head of IT",
+      description: "Wir entwickeln eine Plattform für sichere Unternehmenssoftware. Sie leiten unsere interne IT-Abteilung und verantworten den zuverlässigen Betrieb der Systeme. Zu Ihren Aufgaben gehören die Planung der Infrastruktur, die Betreuung der Mitarbeitenden und die Zusammenarbeit mit unseren Entwicklungsteams. Wir bieten flexible Arbeitszeiten, ein festes Gehalt und langfristige Entwicklungsmöglichkeiten.",
+      eligibility: { allowed: true, postingLanguage: "english" },
+    };
+    for (const call of [loadFullText, savePostingForLater, startApplicationFrom, startScoringPosting]) {
+      expect(await call({ posting: stale })).toMatchObject({ ok: false, error: expect.stringMatching(/English/) });
+    }
+    expect(startJob).not.toHaveBeenCalled();
+    expect(await prisma().posting.count()).toBe(0);
+    expect(await prisma().postingScore.count()).toBe(0);
+  });
+
+  it("validates an explicit stored-results recheck and reports a removed search", async () => {
+    expect(await recheckJobSearch({ searchId: "" })).toMatchObject({ ok: false });
+    expect(await recheckJobSearch({ searchId: "gone" })).toMatchObject({ ok: true, data: { ok: false, problem: "changed" } });
   });
 });

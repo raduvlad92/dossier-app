@@ -23,6 +23,7 @@
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "fflate": "^0.8.3",
+    "franc-min": "6.2.0",
     "jose": "^6.2.12",
     "lucide-react": "^1.59.0",
     "mammoth": "^1.13.0",

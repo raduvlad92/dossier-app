@@ -10,7 +10,15 @@ This fork extends upstream Dossier 1.8.0. Configure it in **Settings → Job age
 - Keep English-only ads and allow required spoken languages from English and Italian. Optional languages and alternatives are evaluated separately: German required rejects, German preferred can pass, English or German can pass. Mixed-language ads, incomplete descriptions and uncertain classification stay out of the match queue with a reason.
 - Edit the excluded employers, including KPMG, Deloitte, PwC, EY and other consultancy groups. Name aliases are checked against the employer; incidental mentions in an ad do not alone make its employer a consultancy. Semantic classification also excludes consultancies outside the list.
 
-Language and employer classification use the configured AI provider and can make mistakes. The Agent screen reports exclusion reasons, failed searches and work deferred by the budget. Confirmed exclusions are cached for seven days; changed content or changed filters is checked again. Uncertain or failed checks rotate behind uninspected results, so later targets can still progress. Current exclusions are checked again before preparing a draft from an older queued candidate.
+English-only acceptance requires an independent local check of the description body and agreement from the configured AI provider. An English title cannot make a German description eligible. Mixed, insufficient and uncertain text stays out of eligible results. Language and employer classification can still make mistakes. The Agent screen reports exclusion reasons, failed searches and work deferred by the budget. Confirmed agent exclusions are cached for seven days; changed content or changed filters is checked again. Uncertain or failed checks rotate behind uninspected results, so later targets can still progress. Current exclusions are checked again before preparing a draft from an older queued candidate.
+
+## Find jobs filters
+
+The same language and employer settings also apply to manual **Find jobs**, even when the recurring agent is off. Search and Show more check results before displaying them. Scoring, saving, opening full text and starting an application enforce the current rules on the server.
+
+Search history retains the raw source results. Opening history makes no new source, parser or AI calls. Legacy results and assessments older than 24 hours, or invalidated by changed rules or descriptions, stay hidden until **Recheck saved results** is selected. Rechecking uses retained results without starting another source search. The screen separates eligible, excluded and unchecked counts; a fully filtered page can still have a next page.
+
+Manual checks use source details and the protected public-page fetch, without activating optional Apify or Bright Data parsers. They can call your configured AI provider. Each action checks at most 25 fresh results, with three checks in flight; repeated checks prioritize uninspected results, then the oldest uncertain attempt. Signed assessments are bound to the exact source data, checked evidence, rules and gate version; imported or browser-supplied metadata cannot grant eligibility. Saved and dismissed history is retained, with current rules checked before onward actions.
 
 ## Choose a CV
 

@@ -110,7 +110,17 @@ export type ShownPosting = FoundPosting & { state: PostingState };
 export type SearchProblem = { ok: false; problem: "off" | "no-country" | "no-key" | "key" | "quota" | "country" | "unavailable" | "changed"; message: string };
 
 /** What a search gives the screen: postings, or what went wrong. */
-export type SearchOutcome = { ok: true; postings: ShownPosting[]; next: string | null } | SearchProblem;
+export type SearchOutcome = { ok: true; postings: ShownPosting[]; next: string | null; filtering?: PostingFiltering } | SearchProblem;
+
+/** Raw source results and their current server-verified eligibility. */
+export type PostingFiltering = {
+  active: boolean;
+  total: number;
+  eligible: number;
+  excluded: number;
+  unchecked: number;
+  reasons: { reason: string; count: number }[];
+};
 
 /** A search kept with what it found (E14-10), as Find jobs opens it. */
 export type StoredSearch = {
@@ -121,6 +131,7 @@ export type StoredSearch = {
   ranAt: string;
   postings: ShownPosting[];
   next: string | null;
+  filtering?: PostingFiltering;
 };
 
 /** A search in the Past searches list, grouped by the day it ran. */

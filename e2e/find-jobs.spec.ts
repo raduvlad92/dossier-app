@@ -6,7 +6,14 @@ import { fakeJobSearches, resetData, sql } from "./support";
 // role and city, come back to the kept search without asking again, save,
 // dismiss and undo, then start an application from a posting and see it
 // marked as applied for.
-test.beforeAll(resetData);
+async function resetLegacyManualSearch() {
+  await resetData();
+  // These original workflows exercise keeping/scoring postings independently
+  // of exclusions. Strict-default filtering has its own manual-filtering spec.
+  await sql(`INSERT INTO "Setting" (key, value, "updatedAt") VALUES ('agentExclusions', $1, now())`,
+    [JSON.stringify({ englishOnly: false, allowedLanguages: [], excludeConsultancies: false, companies: [] })]);
+}
+test.beforeAll(resetLegacyManualSearch);
 
 test("searches, keeps postings, and starts an application from one", async ({ page }) => {
   await page.goto("/jobs");
@@ -38,7 +45,7 @@ test("searches, keeps postings, and starts an application from one", async ({ pa
   await expect(list.getByRole("listitem")).toHaveCount(4);
   await page.goto("/jobs");
   await expect(list.getByRole("listitem")).toHaveCount(4);
-  await expect(page.getByText(/4 postings from JSearch · searched today at \d\d:\d\d/)).toBeVisible();
+  await expect(page.getByText(/4 eligible postings of 4 source results from JSearch · searched today at \d\d:\d\d/)).toBeVisible();
   expect(await fakeJobSearches()).toBe(asked);
 
   // Save the first; dismiss the second, then undo it.
@@ -91,7 +98,7 @@ test("tests the connection in Settings → Job search", async ({ page }) => {
 
 test("scores a posting against the profile, and keeps the score (#208)", async ({ page }) => {
   // Before the test above, nothing was saved, dismissed or applied for.
-  await resetData();
+  await resetLegacyManualSearch();
   await page.goto("/jobs");
   await page.getByRole("search", { name: "Search postings" }).getByRole("button", { name: "Search" }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Senior Product Designer, Payments" })).toBeVisible();
